@@ -1,0 +1,6 @@
+tests
+**/__pycache__
+*.html
+!mosaic/web_index.html
+*.json
+.git

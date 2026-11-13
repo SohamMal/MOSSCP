@@ -1,0 +1,22 @@
+# Render Blueprint: New > Blueprint > pick this repo > Apply.
+# One free web service, built from the Dockerfile. No disk, no database.
+services:
+  - type: web
+    name: mosaic
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      # Required to create rooms. Render generates a random value; read it
+      # under the service's Environment tab and give it to room admins.
+      - key: MOSAIC_CREATE_KEY
+        generateValue: true
+      # The free instance has 512 MB of RAM; keep uploads well inside it.
+      - key: MOSAIC_MAX_TOTAL_MB
+        value: "250"
+      - key: MOSAIC_MAX_ROOM_MB
+        value: "120"
+      - key: MOSAIC_MAX_ROOMS
+        value: "15"

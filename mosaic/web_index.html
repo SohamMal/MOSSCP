@@ -1,0 +1,864 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>mosaic</title>
+<style>
+:root{
+  --bg:#f6f6f7; --panel:#fff; --ink:#18181b; --muted:#6b6b76; --line:#e2e2e7; --soft:#f1f1f4;
+  --accent:#3b5bdb; --accent-ink:#fff; --ok:#15803d; --okbg:#e8f6ee; --warn:#b45309; --warnbg:#fdf3e4;
+  --hot:#b91c1c; --hotbg:#fdecec; --focus:#3b5bdb55; --priv:#6d28d9; --privbg:#f1eafe;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#121215; --panel:#1a1a1f; --ink:#ececf1; --muted:#9a9aa6; --line:#2d2d35; --soft:#22222a;
+    --accent:#8ea2ff; --accent-ink:#0f1024; --ok:#4ade80; --okbg:#12301f; --warn:#fbbf24; --warnbg:#33270f;
+    --hot:#f87171; --hotbg:#3a1616; --focus:#8ea2ff55; --priv:#c4b5fd; --privbg:#2a2140;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#121215; --panel:#1a1a1f; --ink:#ececf1; --muted:#9a9aa6; --line:#2d2d35; --soft:#22222a;
+  --accent:#8ea2ff; --accent-ink:#0f1024; --ok:#4ade80; --okbg:#12301f; --warn:#fbbf24; --warnbg:#33270f;
+  --hot:#f87171; --hotbg:#3a1616; --focus:#8ea2ff55; --priv:#c4b5fd; --privbg:#2a2140;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font:15px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+[hidden]{display:none!important}
+.wrap{max-width:1120px;margin:0 auto;padding:28px 16px 80px}
+.narrow{max-width:620px}
+h1{font-size:1.45rem;margin:0;letter-spacing:-.01em}
+h2{font-size:1rem;margin:0 0 12px;letter-spacing:-.01em}
+.muted{color:var(--muted)} .small{font-size:.84rem}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.86em}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px}
+.stack>*+*{margin-top:14px}
+.grid{display:grid;gap:14px;grid-template-columns:minmax(0,1fr) minmax(0,1fr);align-items:start}
+@media(max-width:900px){.grid{grid-template-columns:minmax(0,1fr)}}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.spacer{flex:1}
+button,.btn{font:inherit;border:1px solid var(--line);background:var(--panel);color:var(--ink);
+  padding:7px 14px;border-radius:8px;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:6px;justify-content:center}
+button:hover:not(:disabled),.btn:hover{background:var(--soft)}
+button:focus-visible,.btn:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--focus);outline-offset:1px}
+.primary{background:var(--accent)!important;border-color:var(--accent)!important;color:var(--accent-ink)!important;font-weight:600}
+.primary:hover:not(:disabled){filter:brightness(1.08)}
+button.danger{color:var(--hot);border-color:var(--hot)}
+button.danger:hover:not(:disabled){background:var(--hotbg)}
+button.ghost{border-color:transparent;padding:4px 8px;color:var(--muted)}
+button:disabled{opacity:.5;cursor:not-allowed}
+input[type=text],input[type=password],textarea,select{font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);
+  border-radius:8px;padding:8px 10px;width:100%}
+textarea{resize:vertical;min-height:64px}
+label.field{display:block}
+label.field>span{display:block;font-size:.8rem;color:var(--muted);margin-bottom:4px}
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:.78rem;padding:2px 10px;border-radius:999px;border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+.pill.ok{color:var(--ok);background:var(--okbg);border-color:transparent}
+.pill.warn{color:var(--warn);background:var(--warnbg);border-color:transparent}
+.pill.priv{color:var(--priv);background:var(--privbg);border-color:transparent}
+.dot{width:7px;height:7px;border-radius:50%;background:currentColor}
+.notice{border-radius:10px;padding:10px 12px;font-size:.88rem}
+.notice.ok{background:var(--okbg);color:var(--ok)}
+.notice.warn{background:var(--warnbg);color:var(--warn)}
+.notice.hot{background:var(--hotbg);color:var(--hot)}
+.notice.priv{background:var(--privbg);color:var(--priv)}
+.notice.info{background:var(--soft);color:var(--muted)}
+.drop{border:1.5px dashed var(--line);border-radius:12px;padding:22px 16px;text-align:center;background:var(--soft);transition:border-color .15s,background .15s}
+.drop.over{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 8%,var(--soft))}
+.drop.compact{padding:14px 12px}
+.drop .big{font-weight:600}
+.drop .row{justify-content:center;margin-top:10px}
+.filelist{max-height:180px;overflow:auto;margin:8px 0 0;padding:0;list-style:none;font-size:.82rem;text-align:left}
+.filelist li{padding:2px 0;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bar{height:6px;background:var(--line);border-radius:4px;overflow:hidden}
+.bar>i{display:block;height:100%;width:0;background:var(--accent);transition:width .2s}
+table{width:100%;border-collapse:collapse;font-size:.88rem}
+th{text-align:left;font-weight:600;color:var(--muted);font-size:.74rem;text-transform:uppercase;letter-spacing:.05em;padding:6px 8px;border-bottom:1px solid var(--line)}
+td{padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:middle}
+tr:last-child td{border-bottom:0}
+td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+td.name{max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tablewrap{overflow-x:auto;max-height:460px;overflow-y:auto}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px}
+.tile{border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+.tile b{display:block;font-size:1.3rem;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.tile span{font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.score{font-weight:650;font-variant-numeric:tabular-nums}
+.s-hot{color:var(--hot)} .s-warn{color:var(--warn)} .s-low{color:var(--muted)}
+.meter{display:inline-block;width:56px;height:6px;background:var(--line);border-radius:3px;vertical-align:middle;margin-left:6px;overflow:hidden}
+.meter>i{display:block;height:100%;background:currentColor}
+.linkbox{display:flex;gap:8px;align-items:center}
+.linkbox input{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.85rem}
+.badge{font-size:.7rem;padding:1px 7px;border-radius:999px;background:var(--soft);color:var(--muted);margin-left:6px}
+.check{width:18px;height:18px;border-radius:50%;background:var(--ok);color:var(--panel);display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:700}
+.overlay{position:fixed;inset:0;background:color-mix(in srgb,var(--bg) 92%,transparent);display:flex;align-items:center;justify-content:center;padding:16px;z-index:10}
+.overlay .card{max-width:480px;text-align:center}
+.reasons{font-size:.76rem;color:var(--muted)}
+.empty{padding:22px 8px;text-align:center;color:var(--muted);font-size:.9rem}
+header.top{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:18px}
+.brand{font-weight:700;letter-spacing:-.02em;color:var(--muted);font-size:.85rem;text-decoration:none}
+input.title{font-size:1.3rem;font-weight:650;border-color:transparent;background:transparent;padding:4px 6px;margin-left:-6px;max-width:520px}
+input.title:hover,input.title:focus{border-color:var(--line);background:var(--panel)}
+.switch{display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-size:.88rem;user-select:none}
+.switch input{width:34px;height:20px;appearance:none;background:var(--line);border-radius:999px;position:relative;cursor:pointer;margin:0;transition:background .15s}
+.switch input::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:var(--panel);transition:left .15s}
+.switch input:checked{background:var(--ok)}
+.switch input:checked::after{left:16px}
+details>summary{cursor:pointer;color:var(--muted);font-size:.86rem}
+.codebig{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:2.1rem;font-weight:700;letter-spacing:.08em;line-height:1.1}
+.codeinput{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace!important;font-size:1.3rem!important;letter-spacing:.12em;text-transform:uppercase;text-align:center}
+.choice{display:grid;gap:10px;grid-template-columns:1fr 1fr}
+@media(max-width:560px){.choice{grid-template-columns:1fr}}
+.choice label{border:1.5px solid var(--line);border-radius:12px;padding:12px 14px;cursor:pointer;display:block;transition:border-color .15s,background .15s}
+.choice label:hover{background:var(--soft)}
+.choice input{position:absolute;opacity:0;pointer-events:none}
+.choice label:has(input:checked){border-color:var(--accent);background:color-mix(in srgb,var(--accent) 7%,var(--panel))}
+.choice label:has(input:focus-visible){outline:2px solid var(--focus);outline-offset:1px}
+.choice b{display:flex;align-items:center;gap:8px;margin-bottom:4px}
+.choice b::before{content:"";width:14px;height:14px;border-radius:50%;border:2px solid var(--line);flex:none;box-sizing:border-box}
+.choice label:has(input:checked) b::before{border-color:var(--accent);background:var(--accent);box-shadow:inset 0 0 0 2px var(--panel)}
+.choice label:has(input:checked){border-width:2px;padding:11px 13px}
+.choice span{font-size:.84rem;color:var(--muted)}
+.hero{display:grid;gap:14px;grid-template-columns:1fr 1fr}
+@media(max-width:700px){.hero{grid-template-columns:1fr}}
+.roomlist a{display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line);color:var(--ink);text-decoration:none}
+.roomlist a:last-child{border-bottom:0}
+.roomlist a:hover .mono{color:var(--accent)}
+</style>
+</head>
+<body>
+
+<!-- ============================ landing ============================ -->
+<main id="landing" class="wrap" style="max-width:860px" hidden>
+  <div class="stack">
+    <div class="brand">mosaic</div>
+    <div>
+      <h1 style="font-size:1.8rem">Code similarity rooms</h1>
+      <p class="muted" style="margin:6px 0 0">Collect submissions in a room and check them for similarity. Nothing is stored: closing a room deletes every file.</p>
+    </div>
+    <div class="hero">
+      <form class="card stack" id="l-join" autocomplete="off">
+        <h2 style="margin:0">Join a room</h2>
+        <label class="field"><span>Room code</span>
+          <input type="text" class="codeinput" id="l-code" maxlength="12" placeholder="XXXX-XXXX" required>
+        </label>
+        <div id="l-join-err" class="notice hot" hidden></div>
+        <button type="submit" class="primary">Join</button>
+      </form>
+      <div class="card stack">
+        <h2 style="margin:0">Run a room</h2>
+        <p class="muted small" style="margin:0">Create a room, share its code, and run the check once everyone has uploaded. You choose whether submitted code can be viewed in the report.</p>
+        <a class="btn primary" href="/create">Create a room</a>
+      </div>
+    </div>
+    <div class="card" id="l-mine" hidden>
+      <h2>Rooms you created on this computer</h2>
+      <div class="roomlist" id="l-mine-list"></div>
+    </div>
+  </div>
+</main>
+
+<!-- ============================= create ============================= -->
+<main id="create" class="wrap narrow" hidden>
+  <div class="stack">
+    <a class="brand" href="/">mosaic</a>
+    <form class="card stack" id="c-form" autocomplete="off">
+      <h1>Create a room</h1>
+      <label class="field"><span>Room name</span>
+        <input type="text" id="c-name" maxlength="120" required placeholder="e.g. COL7001 Assignment 3">
+      </label>
+      <div>
+        <div class="small muted" style="margin-bottom:6px">Can people see submitted code in the report?</div>
+        <div class="choice" role="radiogroup">
+          <label><input type="radio" name="privacy" value="private">
+            <b>Hidden</b><span>Nobody, including you, can read anyone's code. The report shows only similarity: scores, reasons and which parts match, with code blurred.</span></label>
+          <label><input type="radio" name="privacy" value="open">
+            <b>Visible</b><span>You can read matching code side by side in the report, like MOSS.</span></label>
+        </div>
+        <div class="notice info small" style="margin-top:8px">This choice is locked once the room is created. Peers see which mode the room uses before they upload.</div>
+      </div>
+      <label class="field" style="max-width:260px"><span>Room closes automatically after</span>
+        <select id="c-hours"></select>
+      </label>
+      <label class="field" id="c-key-wrap" hidden><span>Room-creation key (ask whoever runs this server)</span>
+        <input type="password" id="c-key" autocomplete="off">
+      </label>
+      <div id="c-err" class="notice hot" hidden></div>
+      <div class="row"><button type="submit" class="primary" id="c-submit">Create room</button><a class="btn" href="/">Cancel</a></div>
+    </form>
+  </div>
+</main>
+
+<!-- ============================== peer ============================== -->
+<main id="peer" class="wrap narrow" hidden>
+  <div class="stack">
+    <a class="brand" href="/">mosaic</a>
+    <div class="card stack" id="peer-head">
+      <div class="row"><h1 id="p-name">Loading&hellip;</h1><span class="spacer"></span><span id="p-status"></span></div>
+      <div class="row small muted"><span>Room <span class="mono" id="p-code"></span></span><span id="p-deadline"></span></div>
+      <p id="p-instructions" style="white-space:pre-wrap;margin:0" hidden></p>
+      <div id="p-privacy" class="notice small"></div>
+    </div>
+
+    <div id="p-invalid" class="card stack" hidden>
+      <h2 style="margin:0">This room isn't open</h2>
+      <p class="muted" style="margin:0" id="p-invalid-text">The room may have been closed, or the code is wrong. Check the code with your host.</p>
+      <a class="btn" href="/">Enter a different code</a>
+    </div>
+
+    <div id="p-receipt" class="card stack" hidden>
+      <div class="row"><span class="check">&#10003;</span><h2 style="margin:0">Submitted</h2></div>
+      <p style="margin:0" id="p-receipt-text"></p>
+      <details><summary>Files received</summary><ul class="filelist" id="p-receipt-files"></ul></details>
+      <div class="row">
+        <button id="p-replace">Replace my submission</button>
+        <button class="danger" id="p-withdraw">Withdraw</button>
+      </div>
+    </div>
+
+    <div id="p-closed" class="notice warn" hidden>The host isn't accepting submissions right now.</div>
+
+    <form id="p-form" class="card stack" hidden autocomplete="off">
+      <h2 id="p-form-title">Upload your code</h2>
+      <label class="field"><span>Your name or roll number</span>
+        <input type="text" id="p-label" maxlength="60" required placeholder="e.g. 2025CS10123 Priya">
+      </label>
+      <div class="drop" id="p-drop">
+        <div class="big">Drop your project folder or a .zip here</div>
+        <div class="muted small">Only source files are sent. Other files are left out.</div>
+        <div class="row">
+          <button type="button" data-pick="folder">Choose folder</button>
+          <button type="button" data-pick="files">Choose files or .zip</button>
+        </div>
+        <input type="file" data-input="folder" webkitdirectory multiple hidden>
+        <input type="file" data-input="files" multiple hidden>
+        <div data-summary class="small" style="margin-top:10px"></div>
+        <ul class="filelist" data-list></ul>
+      </div>
+      <div id="p-progress" hidden><div class="bar"><i></i></div><div class="muted small" style="margin-top:4px" data-text></div></div>
+      <div id="p-error" class="notice hot" hidden></div>
+      <div class="row">
+        <button type="submit" class="primary" id="p-submit" disabled>Submit</button>
+        <button type="button" class="ghost" id="p-cancel-replace" hidden>Cancel</button>
+      </div>
+    </form>
+
+    <p class="muted small">Files are held only in the room's memory, never saved to disk, and deleted when the host closes the room. Other participants can't see your files.</p>
+  </div>
+</main>
+
+<!-- ============================== admin ============================== -->
+<main id="host" class="wrap" hidden>
+  <header class="top">
+    <div style="min-width:0;flex:1">
+      <a class="brand" href="/">mosaic &middot; room admin</a>
+      <input class="title" id="h-name" type="text" maxlength="120" aria-label="Room name">
+    </div>
+    <span id="h-privacy"></span>
+    <label class="switch" title="Allow peers to submit"><input type="checkbox" id="h-accepting"><span id="h-accepting-text">Accepting submissions</span></label>
+    <span class="pill" id="h-expiry"></span>
+    <button class="danger" id="h-end">Close room</button>
+  </header>
+
+  <div id="h-denied" class="card stack" hidden>
+    <h2 style="margin:0">Admin access only</h2>
+    <p class="muted" style="margin:0">Open the admin link you saved when you created this room, on the same browser, or ask the room's creator. If the room was closed, its files were deleted.</p>
+    <a class="btn" href="/">Back to start</a>
+  </div>
+
+  <div id="h-body" class="stack" hidden>
+    <section class="card">
+      <div class="grid" style="align-items:center">
+        <div class="stack">
+          <div class="small muted">Room code</div>
+          <div class="codebig" id="h-code"></div>
+          <div class="muted small">Peers open <span class="mono" id="h-site"></span> and enter this code, or use the link.</div>
+        </div>
+        <div class="stack">
+          <div class="linkbox"><input type="text" readonly id="h-link" aria-label="Join link"><button id="h-copy" class="primary">Copy link</button></div>
+          <div id="h-otherlinks" class="small muted"></div>
+          <div id="h-nolan" class="notice warn small" hidden></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card stack" id="h-adminlink-card" hidden>
+      <div class="row"><h2 style="margin:0">Save your admin link</h2><span class="spacer"></span><button class="ghost" id="h-adminlink-dismiss">Done</button></div>
+      <p class="muted small" style="margin:0">This browser remembers it, but keep a copy (for example in a note to yourself) in case you switch devices. Anyone with this link can manage the room, so don't share it.</p>
+      <div class="linkbox"><input type="text" readonly id="h-adminlink" aria-label="Admin link"><button id="h-adminlink-copy">Copy</button></div>
+    </section>
+
+    <section class="card">
+      <label class="field"><span>Instructions shown to peers (optional)</span>
+        <textarea id="h-instructions" maxlength="2000" placeholder="e.g. Upload your full Assignment 3 folder. Deadline 6 pm."></textarea>
+      </label>
+    </section>
+
+    <div class="grid">
+      <section class="card stack">
+        <div class="row"><h2 style="margin:0">Submissions <span id="h-count" class="muted"></span></h2><span class="spacer"></span><span id="h-mem" class="muted small"></span></div>
+        <div class="tablewrap" id="h-table"></div>
+        <details>
+          <summary>Add submissions yourself</summary>
+          <div class="stack" style="margin-top:10px">
+            <div class="drop compact" id="h-drop">
+              <div class="big">Drop a folder or .zip with one subfolder per student</div>
+              <div class="row">
+                <button type="button" data-pick="folder">Choose folder</button>
+                <button type="button" data-pick="files">Choose .zip or files</button>
+              </div>
+              <input type="file" data-input="folder" webkitdirectory multiple hidden>
+              <input type="file" data-input="files" multiple hidden>
+              <div data-summary class="small" style="margin-top:8px"></div>
+            </div>
+            <div class="row"><button class="primary" id="h-upload" disabled>Add</button><span id="h-upload-msg" class="small muted"></span></div>
+          </div>
+        </details>
+        <details>
+          <summary>Provided skeleton code (optional) <span id="h-skel-count"></span></summary>
+          <div class="stack" style="margin-top:10px">
+            <p class="muted small" style="margin:0">Code you handed out is ignored when comparing. Code shared by most submissions is ignored automatically anyway.</p>
+            <div class="drop compact" id="h-skel-drop">
+              <div class="big">Drop the skeleton folder or .zip</div>
+              <div class="row">
+                <button type="button" data-pick="folder">Choose folder</button>
+                <button type="button" data-pick="files">Choose .zip or files</button>
+              </div>
+              <input type="file" data-input="folder" webkitdirectory multiple hidden>
+              <input type="file" data-input="files" multiple hidden>
+              <div data-summary class="small" style="margin-top:8px"></div>
+            </div>
+            <div class="row"><button class="primary" id="h-skel-upload" disabled>Use as skeleton</button>
+              <button class="ghost" id="h-skel-clear" hidden>Remove skeleton</button><span id="h-skel-msg" class="small muted"></span></div>
+          </div>
+        </details>
+      </section>
+
+      <section class="card stack">
+        <h2 style="margin:0">Similarity check</h2>
+        <div class="row">
+          <label class="field" style="flex:1;min-width:180px"><span>Report pairs scoring at least <b id="h-thr-v">25%</b></span>
+            <input type="range" id="h-thr" min="10" max="80" step="5" value="25" style="width:100%">
+          </label>
+          <label class="field" style="width:160px"><span>Language</span>
+            <select id="h-lang"><option value="">All (detect)</option></select>
+          </label>
+        </div>
+        <div class="row"><button class="primary" id="h-run">Run check</button><span id="h-run-msg" class="small muted"></span></div>
+        <div id="h-progress" hidden><div class="bar"><i></i></div><div class="muted small" style="margin-top:4px" data-text></div></div>
+        <div id="h-stale" class="notice warn" hidden>Submissions have changed since this check. Run it again to include them.</div>
+        <div id="h-error" class="notice hot" hidden></div>
+        <div id="h-tiles-wrap" hidden><div class="tiles" id="h-tiles"></div></div>
+      </section>
+    </div>
+
+    <section class="card stack" id="h-results" hidden>
+      <div class="row"><h2 style="margin:0">Results</h2><span class="spacer"></span>
+        <a class="btn primary" id="h-open" target="_blank" rel="noopener noreferrer" href="#">Open full report</a>
+        <button id="h-dl-html">Download report</button>
+        <button id="h-dl-json">Download JSON</button>
+      </div>
+      <p class="muted small" style="margin:0" id="h-results-note"></p>
+      <div id="h-clusters"></div>
+      <div class="tablewrap" id="h-pairs"></div>
+    </section>
+
+    <p class="muted small" id="h-footnote"></p>
+  </div>
+
+  <div class="overlay" id="h-ended" hidden>
+    <div class="card stack">
+      <h2>Room closed</h2>
+      <p class="muted" id="h-ended-text" style="margin:0">All files and reports in this room were deleted.</p>
+      <div class="row" style="justify-content:center"><a class="btn primary" href="/create">Create another room</a><a class="btn" href="/">Home</a></div>
+    </div>
+  </div>
+</main>
+
+<script>
+"use strict";
+const $ = (s, r = document) => r.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const pct = x => Math.round(100 * (x || 0)) + "%";
+const fmtBytes = n => n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(1) + " KB" : (n / 1048576).toFixed(1) + " MB";
+function fmtDur(s){ s = Math.max(0, Math.round(s)); const d = Math.floor(s/86400), h = Math.floor(s%86400/3600), m = Math.floor(s%3600/60);
+  return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : m ? `${m}m` : `${s}s`; }
+function fmtTime(t){ return new Date(t * 1000).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"}); }
+const normCode = s => String(s || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+const showCode = c => c.length === 8 ? c.slice(0, 4) + "-" + c.slice(4) : c;
+const store = {
+  get(k){ try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } },
+  set(k, v){ try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+  del(k){ try { localStorage.removeItem(k); } catch {} },
+  keys(prefix){ try { return Object.keys(localStorage).filter(k => k.startsWith(prefix)); } catch { return []; } },
+};
+async function copyText(input, btn, label){
+  try { await navigator.clipboard.writeText(input.value); }
+  catch { input.select(); try { document.execCommand("copy"); } catch {} }
+  const old = btn.textContent; btn.textContent = "Copied"; setTimeout(() => btn.textContent = label || old, 1400);
+}
+
+/* ---------------- file collection ---------------- */
+const JUNK = new Set(["__MACOSX",".git","node_modules","__pycache__",".venv","venv",".idea",".vscode"]);
+const ARCHIVES = [".zip",".tar",".tar.gz",".tgz"];
+let EXTS = new Set([".py",".c",".h",".cpp",".cc",".cxx",".hpp",".hh",".java",".js",".jsx",".ts",".tsx",".cs",".go",".rs",".kt",".swift",".scala",".php",".m",".pyw",".c++"]);
+function wanted(path){
+  const segs = path.split("/");
+  if (segs.some(s => JUNK.has(s))) return false;
+  const name = segs[segs.length - 1].toLowerCase();
+  if (name.startsWith(".")) return false;
+  if (ARCHIVES.some(e => name.endsWith(e))) return true;
+  const dot = name.lastIndexOf(".");
+  return dot > 0 && EXTS.has(name.slice(dot));
+}
+function readAllEntries(reader){
+  return new Promise((resolve, reject) => {
+    const all = [];
+    const next = () => reader.readEntries(batch => { if (!batch.length) return resolve(all); all.push(...batch); next(); }, reject);
+    next();
+  });
+}
+async function walkEntry(entry, out){
+  if (entry.isFile){
+    const file = await new Promise((res, rej) => entry.file(res, rej));
+    out.push({path: entry.fullPath.replace(/^\/+/, ""), file});
+  } else if (entry.isDirectory){
+    if (JUNK.has(entry.name)) return;
+    for (const child of await readAllEntries(entry.createReader())) await walkEntry(child, out);
+  }
+}
+async function filesFromDrop(dt){
+  const entries = [...(dt.items || [])].map(i => i.webkitGetAsEntry && i.webkitGetAsEntry()).filter(Boolean);
+  if (!entries.length) return [...(dt.files || [])].map(f => ({path: f.name, file: f}));
+  const out = [];
+  for (const e of entries) await walkEntry(e, out);
+  return out;
+}
+class Picker {
+  constructor(el, onchange){
+    this.el = el; this.items = []; this.ignored = 0; this.onchange = onchange;
+    el.querySelectorAll("[data-pick]").forEach(b => b.addEventListener("click", () =>
+      el.querySelector(`[data-input="${b.dataset.pick}"]`).click()));
+    el.querySelectorAll("[data-input]").forEach(inp => inp.addEventListener("change", () => {
+      this.set([...inp.files].map(f => ({path: f.webkitRelativePath || f.name, file: f}))); inp.value = "";
+    }));
+    el.addEventListener("dragover", e => { e.preventDefault(); el.classList.add("over"); });
+    el.addEventListener("dragleave", e => { if (!el.contains(e.relatedTarget)) el.classList.remove("over"); });
+    el.addEventListener("drop", async e => {
+      e.preventDefault(); el.classList.remove("over");
+      this.summary("Reading&hellip;");
+      try { this.set(await filesFromDrop(e.dataTransfer)); }
+      catch { this.summary('<span class="s-hot">Could not read the dropped items. Try the buttons instead.</span>'); }
+    });
+  }
+  set(list){ const keep = list.filter(x => wanted(x.path)); this.ignored = list.length - keep.length; this.items = keep; this.render(); this.onchange && this.onchange(this); }
+  clear(){ this.items = []; this.ignored = 0; this.render(); this.onchange && this.onchange(this); }
+  get bytes(){ return this.items.reduce((a, x) => a + x.file.size, 0); }
+  summary(html){ const s = this.el.querySelector("[data-summary]"); if (s) s.innerHTML = html; }
+  render(){
+    const n = this.items.length;
+    if (!n && !this.ignored) this.summary("");
+    else {
+      const arch = this.items.filter(x => ARCHIVES.some(e => x.path.toLowerCase().endsWith(e))).length;
+      let txt = n ? `<b>${n}</b> file${n === 1 ? "" : "s"} &middot; ${fmtBytes(this.bytes)}` : '<span class="s-hot">No source files found</span>';
+      if (arch) txt += ` &middot; ${arch} archive${arch === 1 ? "" : "s"} (unpacked on upload)`;
+      if (this.ignored) txt += ` <span class="muted">&middot; ${this.ignored} other file${this.ignored === 1 ? "" : "s"} left out</span>`;
+      if (n) txt += ` &middot; <button type="button" class="ghost" data-clear>clear</button>`;
+      this.summary(txt);
+      const c = this.el.querySelector("[data-clear]"); if (c) c.onclick = () => this.clear();
+    }
+    const list = this.el.querySelector("[data-list]");
+    if (list) list.innerHTML = this.items.slice(0, 60).map(x => `<li>${esc(x.path)}</li>`).join("") + (n > 60 ? `<li>&hellip; and ${n - 60} more</li>` : "");
+  }
+}
+function send(url, meta, items, headers, onprogress){
+  return new Promise(resolve => {
+    const fd = new FormData();
+    fd.append("meta", JSON.stringify(meta || {}));
+    fd.append("manifest", JSON.stringify(items.map(x => x.path)));
+    for (const x of items) fd.append("file", x.file, "f");
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    xhr.setRequestHeader("X-Mosaic", "1");
+    for (const [k, v] of Object.entries(headers || {})) xhr.setRequestHeader(k, v);
+    xhr.upload.onprogress = e => { if (e.lengthComputable && onprogress) onprogress(e.loaded / e.total); };
+    xhr.onload = () => { let j = {}; try { j = JSON.parse(xhr.responseText); } catch {} resolve({status: xhr.status, json: j}); };
+    xhr.onerror = () => resolve({status: 0, json: {error: "Could not reach the server."}});
+    xhr.send(fd);
+  });
+}
+function setBar(box, frac, text){
+  box.hidden = false;
+  $("i", box).style.width = Math.round(100 * Math.max(0, Math.min(1, frac))) + "%";
+  $("[data-text]", box).textContent = text || "";
+}
+function jsonPost(url, body, headers){
+  return fetch(url, {method: "POST", headers: {"X-Mosaic": "1", "Content-Type": "application/json", ...(headers || {})}, body: JSON.stringify(body || {})});
+}
+
+/* ---------------- routing ---------------- */
+const path = location.pathname.replace(/\/+$/, "") || "/";
+let m;
+if (path === "/create") createView();
+else if ((m = path.match(/^\/(?:join|j)\/([A-Za-z0-9-]+)$/))) peerView(normCode(m[1]));
+else if ((m = path.match(/^\/room\/([A-Za-z0-9-]+)$/))) hostView(normCode(m[1]));
+else landingView();
+
+/* =============================== landing =============================== */
+function landingView(){
+  $("#landing").hidden = false;
+  $("#l-join").addEventListener("submit", async e => {
+    e.preventDefault();
+    const code = normCode($("#l-code").value);
+    const err = $("#l-join-err"); err.hidden = true;
+    if (code.length < 6){ err.textContent = "Room codes look like XXXX-XXXX."; err.hidden = false; return; }
+    const res = await fetch(`/api/rooms/${code}/info`, {cache: "no-store"});
+    if (res.ok) location.href = "/join/" + showCode(code);
+    else { const j = await res.json().catch(() => ({})); err.textContent = j.error || "No open room with that code."; err.hidden = false; }
+  });
+  $("#l-code").addEventListener("input", e => {
+    const c = normCode(e.target.value).slice(0, 8);
+    e.target.value = c.length > 4 ? c.slice(0, 4) + "-" + c.slice(4) : c;
+  });
+  // rooms this browser created (admin tokens live only here)
+  const keys = store.keys("mosaic:admin:");
+  if (!keys.length) return;
+  const list = $("#l-mine-list");
+  Promise.all(keys.map(async k => {
+    const code = k.slice("mosaic:admin:".length); const rec = store.get(k);
+    if (!rec || !rec.token) { store.del(k); return null; }
+    const res = await fetch(`/api/rooms/${code}/admin/state`, {headers: {"X-Mosaic-Admin": rec.token}, cache: "no-store"}).catch(() => null);
+    if (!res || !res.ok){ store.del(k); return null; }
+    const s = await res.json();
+    return `<a href="/room/${esc(showCode(code))}"><span class="mono">${esc(showCode(code))}</span><span>${esc(s.name)}</span><span class="spacer"></span>
+      <span class="pill ${s.private ? "priv" : ""}">${s.private ? "Hidden" : "Visible"}</span><span class="muted small">${s.uploads.length} submitted</span></a>`;
+  })).then(rows => { rows = rows.filter(Boolean); if (rows.length){ list.innerHTML = rows.join(""); $("#l-mine").hidden = false; } });
+}
+
+/* =============================== create =============================== */
+async function createView(){
+  $("#create").hidden = false;
+  document.title = "mosaic · create a room";
+  let cfg = {durations: [1, 2, 4, 8, 12, 24], create_key_required: false};
+  try { cfg = await (await fetch("/api/config", {cache: "no-store"})).json(); } catch {}
+  const sel = $("#c-hours");
+  for (const h of cfg.durations) sel.add(new Option(h === 1 ? "1 hour" : h < 24 ? `${h} hours` : h === 24 ? "1 day" : `${h / 24} days`, h));
+  sel.value = cfg.durations.includes(4) ? "4" : String(cfg.durations[cfg.durations.length - 1]);
+  $("#c-key-wrap").hidden = !cfg.create_key_required;
+  $("#c-key").required = !!cfg.create_key_required;
+
+  $("#c-form").addEventListener("submit", async e => {
+    e.preventDefault();
+    const err = $("#c-err"); err.hidden = true;
+    const privacy = (document.querySelector('input[name="privacy"]:checked') || {}).value;
+    if (!privacy){ err.textContent = "Choose whether code is hidden or visible in the report."; err.hidden = false; return; }
+    $("#c-submit").disabled = true;
+    const res = await jsonPost("/api/rooms", {name: $("#c-name").value.trim(), privacy, hours: +sel.value, key: $("#c-key").value});
+    const j = await res.json().catch(() => ({}));
+    if (res.status !== 201){ err.textContent = j.error || "Could not create the room."; err.hidden = false; $("#c-submit").disabled = false; return; }
+    const code = normCode(j.code);
+    store.set("mosaic:admin:" + code, {token: j.admin_token, created: Date.now()});
+    try { sessionStorage.setItem("mosaic:fresh:" + code, "1"); } catch {}
+    location.href = "/room/" + j.code;
+  });
+}
+
+/* ================================ peer ================================ */
+function peerView(code){
+  $("#peer").hidden = false;
+  const KEY = "mosaic:receipt:" + code;
+  const api = "/api/rooms/" + code;
+  let info = null, replacing = false, limits = {peer_bytes: 25e6, peer_files: 500};
+  const picker = new Picker($("#p-drop"), () => validate());
+  const label = $("#p-label");
+  label.addEventListener("input", validate);
+
+  function validate(){
+    const err = $("#p-error"); err.hidden = true;
+    let ok = picker.items.length > 0 && label.value.trim().length > 0;
+    if (picker.bytes > limits.peer_bytes){ err.textContent = `That's ${fmtBytes(picker.bytes)}; the limit is ${fmtBytes(limits.peer_bytes)}. Leave out build outputs and data files.`; err.hidden = false; ok = false; }
+    $("#p-submit").disabled = !ok || !info?.accepting;
+  }
+  function gone(text){
+    $("#p-invalid").hidden = false; $("#peer-head").hidden = true; $("#p-form").hidden = true; $("#p-receipt").hidden = true; $("#p-closed").hidden = true;
+    if (text) $("#p-invalid-text").textContent = text;
+  }
+  function render(){
+    const r = store.get(KEY);
+    $("#p-name").textContent = info.name; $("#p-code").textContent = info.code;
+    document.title = info.name + " · upload";
+    const ins = $("#p-instructions"); ins.hidden = !info.instructions; ins.textContent = info.instructions || "";
+    $("#p-status").innerHTML = info.accepting ? '<span class="pill ok"><span class="dot"></span>Open</span>' : '<span class="pill warn"><span class="dot"></span>Closed</span>';
+    $("#p-deadline").textContent = info.expires ? `· closes in ${fmtDur(info.expires - info.now)}` : "";
+    const pv = $("#p-privacy");
+    pv.className = "notice small " + (info.private ? "priv" : "info");
+    pv.innerHTML = info.private
+      ? "<b>Code hidden.</b> Nobody, including the host, can read your code. The report shows only how similar submissions are."
+      : "<b>Code visible.</b> The host can read submitted code in the similarity report.";
+    $("#p-closed").hidden = info.accepting;
+    const showReceipt = !!r && !replacing;
+    $("#p-receipt").hidden = !showReceipt;
+    if (r){
+      $("#p-receipt-text").innerHTML = `As <b>${esc(r.label)}</b>: ${r.files.length} file${r.files.length === 1 ? "" : "s"}, ${fmtBytes(r.bytes)}, at ${fmtTime(r.at)}.`;
+      $("#p-receipt-files").innerHTML = r.files.map(f => `<li>${esc(f)}</li>`).join("");
+      $("#p-replace").disabled = !info.accepting;
+    }
+    $("#p-form").hidden = !info.accepting || showReceipt;
+    $("#p-form-title").textContent = replacing ? "Replace your submission" : "Upload your code";
+    $("#p-submit").textContent = replacing ? "Replace submission" : "Submit";
+    $("#p-cancel-replace").hidden = !replacing;
+    validate();
+  }
+  async function load(){
+    try {
+      const res = await fetch(api + "/info", {cache: "no-store"});
+      if (res.status === 429){ gone("Too many attempts from this network. Wait a few minutes and try again."); return false; }
+      if (!res.ok){ if (info) store.del(KEY); gone(info ? "The host closed this room, and every file in it was deleted." : null); return false; }
+      info = await res.json();
+      limits = info.limits || limits;
+      if (info.extensions) EXTS = new Set(info.extensions.filter(e => !ARCHIVES.includes(e)));
+      render();
+      return true;
+    } catch { return true; }
+  }
+  $("#p-form").addEventListener("submit", async e => {
+    e.preventDefault();
+    const name = label.value.trim();
+    if (!name || !picker.items.length) return;
+    const r = store.get(KEY);
+    const meta = {name};
+    if (replacing && r){ meta.replace_id = r.id; meta.receipt = r.receipt; }
+    $("#p-submit").disabled = true;
+    const prog = $("#p-progress");
+    setBar(prog, 0, "Uploading…");
+    const res = await send(api + "/submit", meta, picker.items, {}, f => setBar(prog, f, f < 1 ? `Uploading… ${Math.round(f * 100)}%` : "Processing…"));
+    prog.hidden = true;
+    if (res.status === 201){
+      store.set(KEY, {id: res.json.id, receipt: res.json.receipt, label: res.json.label, files: res.json.files, bytes: res.json.bytes, at: res.json.at});
+      replacing = false; picker.clear(); render();
+      if (res.json.warnings?.length) $("#p-receipt-text").innerHTML += `<br><span class="s-warn small">${res.json.warnings.map(esc).join("<br>")}</span>`;
+    } else {
+      const err = $("#p-error"); err.textContent = res.json.error || `Upload failed (${res.status}).`; err.hidden = false;
+      $("#p-submit").disabled = false;
+    }
+  });
+  $("#p-replace").onclick = () => { replacing = true; render(); };
+  $("#p-cancel-replace").onclick = () => { replacing = false; picker.clear(); render(); };
+  $("#p-withdraw").onclick = async () => {
+    const r = store.get(KEY); if (!r) return;
+    if (!confirm("Withdraw your submission? Your files will be deleted from the room.")) return;
+    const res = await fetch(`${api}/submit/${r.id}`, {method: "DELETE", headers: {"X-Mosaic": "1", "X-Mosaic-Receipt": r.receipt}});
+    if (res.ok || res.status === 404){ store.del(KEY); replacing = false; render(); }
+  };
+  load().then(ok => { if (ok) setInterval(load, 20000); });
+}
+
+/* ================================ admin ================================ */
+function hostView(code){
+  $("#host").hidden = false;
+  document.title = "mosaic · room " + showCode(code);
+  const KEY = "mosaic:admin:" + code;
+  const hash = location.hash.replace(/^#/, "");
+  if (hash){ store.set(KEY, {token: hash, created: Date.now()}); history.replaceState(null, "", location.pathname); }
+  const token = (store.get(KEY) || {}).token || "";
+  const H = {"X-Mosaic-Admin": token};
+  const api = "/api/rooms/" + code + "/admin";
+  let state = null, timer = null, ended = false, fresh = false;
+  try { fresh = sessionStorage.getItem("mosaic:fresh:" + code) === "1"; sessionStorage.removeItem("mosaic:fresh:" + code); } catch {}
+
+  const bulk = new Picker($("#h-drop"), p => { $("#h-upload").disabled = !p.items.length; });
+  const skel = new Picker($("#h-skel-drop"), p => { $("#h-skel-upload").disabled = !p.items.length; });
+
+  function showEnded(text){
+    ended = true; clearTimeout(timer); store.del(KEY);
+    if (text) $("#h-ended-text").textContent = text;
+    $("#h-ended").hidden = false;
+  }
+  function denied(){
+    $("#h-denied").hidden = false; $("#h-body").hidden = true;
+    ["#h-end", "#h-expiry", "#h-privacy", ".switch", "#h-name"].forEach(s => $(s).hidden = true);
+  }
+  async function refresh(){
+    if (ended) return;
+    let res;
+    try { res = await fetch(api + "/state", {headers: H, cache: "no-store"}); }
+    catch { timer = setTimeout(refresh, 4000); return; }
+    if (res.status === 403){
+      if (state) showEnded("This room is closed. All its files and reports were deleted.");
+      else denied();
+      return;
+    }
+    if (!res.ok){ timer = setTimeout(refresh, 3000); return; }
+    state = await res.json();
+    render();
+    timer = setTimeout(refresh, state.analysis.status === "running" ? 700 : 2500);
+  }
+
+  function render(){
+    const s = state;
+    $("#h-body").hidden = false;
+    if (document.activeElement !== $("#h-name")) $("#h-name").value = s.name;
+    if (document.activeElement !== $("#h-instructions")) $("#h-instructions").value = s.instructions || "";
+    $("#h-privacy").innerHTML = s.private
+      ? '<span class="pill priv" title="Chosen when the room was created; cannot be changed">Code hidden &middot; locked</span>'
+      : '<span class="pill" title="Chosen when the room was created; cannot be changed">Code visible &middot; locked</span>';
+    $("#h-accepting").checked = s.accepting;
+    $("#h-accepting-text").textContent = s.accepting ? "Accepting submissions" : "Submissions closed";
+    const left = s.expires - s.now;
+    $("#h-expiry").textContent = "Closes in " + fmtDur(left);
+    $("#h-expiry").className = "pill" + (left < 1800 ? " warn" : "");
+
+    $("#h-code").textContent = s.code;
+    const links = s.join_links || [];
+    const lan = links.filter(l => !/\/\/(127\.0\.0\.1|localhost)[:/]/.test(l));
+    const primary = lan[0] || links[0] || (location.origin + "/join/" + s.code);
+    if ($("#h-link").value !== primary) $("#h-link").value = primary;
+    $("#h-site").textContent = primary.replace(/\/join\/.*$/, "");
+    $("#h-otherlinks").innerHTML = lan.length > 1 ? "Also reachable at: " + lan.slice(1).map(l => `<span class="mono">${esc(l)}</span>`).join(", ") : "";
+    $("#h-nolan").hidden = lan.length > 0;
+    if (!lan.length) $("#h-nolan").innerHTML = 'This server only listens on this computer, so only people using this computer can join. Start it without <span class="mono">--host 127.0.0.1</span>, or host it online (see the README).';
+
+    if (fresh){
+      $("#h-adminlink-card").hidden = false;
+      $("#h-adminlink").value = location.origin + "/room/" + s.code + "#" + token;
+    }
+
+    $("#h-count").textContent = s.uploads.length ? `(${s.uploads.length})` : "";
+    $("#h-mem").textContent = `${fmtBytes(s.total_bytes)} in memory`;
+    if (!s.uploads.length){
+      $("#h-table").innerHTML = '<div class="empty">No submissions yet. Share the room code.</div>';
+    } else {
+      $("#h-table").innerHTML = `<table><thead><tr><th>Name</th><th class="num">Files</th><th class="num">Size</th><th class="num">Received</th><th></th></tr></thead><tbody>${
+        s.uploads.map(u => `<tr><td class="name" title="${esc(u.label + "\n\n" + u.paths.join("\n"))}">${esc(u.label)}${u.source === "host" ? '<span class="badge">added by you</span>' : ""}</td>
+          <td class="num">${u.files}</td><td class="num">${fmtBytes(u.bytes)}</td><td class="num">${fmtTime(u.updated)}</td>
+          <td class="num"><button class="ghost" data-del="${esc(u.id)}" title="Remove" aria-label="Remove ${esc(u.label)}">&times;</button></td></tr>`).join("")
+      }</tbody></table>`;
+      $("#h-table").querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
+        const u = s.uploads.find(x => x.id === b.dataset.del);
+        if (!confirm(`Remove ${u ? u.label : "this submission"}? Its files are deleted.`)) return;
+        await fetch(api + "/uploads/" + b.dataset.del, {method: "DELETE", headers: {...H, "X-Mosaic": "1"}});
+        refresh();
+      });
+    }
+    $("#h-skel-count").textContent = s.skeleton.length ? `(${s.skeleton.length} file${s.skeleton.length === 1 ? "" : "s"})` : "";
+    $("#h-skel-clear").hidden = !s.skeleton.length;
+    const sel = $("#h-lang");
+    if (sel.options.length === 1) for (const l of s.languages) if (l !== "generic") sel.add(new Option(l, l));
+
+    const a = s.analysis, running = a.status === "running";
+    $("#h-run").disabled = running || s.uploads.length < 2;
+    $("#h-run-msg").textContent = s.uploads.length < 2 ? "Needs at least two submissions." : "";
+    const prog = $("#h-progress");
+    if (running){
+      const frac = a.total ? a.done / a.total : 0;
+      const phase = {load: "Reading files", compare: "Comparing pairs", starting: "Starting"}[a.phase] || a.phase;
+      setBar(prog, a.phase === "compare" ? 0.3 + 0.7 * frac : 0.3 * frac, a.total ? `${phase}… ${a.done}/${a.total}` : phase + "…");
+    } else prog.hidden = true;
+    $("#h-error").hidden = a.status !== "error";
+    if (a.status === "error") $("#h-error").textContent = "The check failed: " + a.error;
+    $("#h-stale").hidden = !(a.status === "done" && a.stale);
+    $("#h-results").hidden = a.status !== "done";
+    $("#h-tiles-wrap").hidden = a.status !== "done";
+    $("#h-results-note").textContent = s.private
+      ? "This room hides code: the report shows each file as blurred line shapes with the matching passages highlighted. No code text is sent to your browser."
+      : "The full report shows matching code side by side. Downloading saves a copy on this computer, which you'll need to delete yourself.";
+    $("#h-footnote").textContent = "Everything in this room (uploads, skeleton and reports) is held in the server's memory only. Closing the room, reaching its time limit, or stopping the server deletes all of it."
+      + (s.private ? "" : " Nothing is written to disk unless you download a report.");
+    if (a.status === "done") renderResults(a.summary);
+  }
+
+  let lastSummary = null, linkExpires = 0;
+  async function refreshReportLink(force){
+    if (!force && Date.now() < linkExpires) return;
+    const res = await jsonPost(api + "/report-link", {}, H);
+    if (!res.ok) return;
+    $("#h-open").href = (await res.json()).url;
+    linkExpires = Date.now() + 20 * 60 * 1000;
+  }
+  $("#h-open").addEventListener("click", e => {
+    if ($("#h-open").getAttribute("href") === "#"){ e.preventDefault(); refreshReportLink(true); }
+    else if (Date.now() >= linkExpires) setTimeout(() => refreshReportLink(true), 0);
+  });
+  function renderResults(sm){
+    refreshReportLink(false);
+    if (JSON.stringify(sm) === JSON.stringify(lastSummary)) return;
+    lastSummary = sm;
+    refreshReportLink(true);
+    $("#h-tiles").innerHTML = [
+      [sm.submissions, "submissions"], [sm.files, "files"], [sm.pairs_examined.toLocaleString(), "pairs examined"],
+      [sm.above_threshold, "above threshold"], [sm.flagged, "score ≥ 50%"], [sm.clusters.length, "clusters"],
+    ].map(([n, l]) => `<div class="tile"><b>${n}</b><span>${l}</span></div>`).join("");
+    $("#h-pairs").innerHTML = !sm.top.length ? '<div class="empty">No pairs above the threshold.</div>'
+      : `<table><thead><tr><th>Score</th><th>Pair</th><th class="num">Tokens</th><th class="num">Structure</th><th class="num">z</th></tr></thead><tbody>${
+        sm.top.map(p => {
+          const cls = p.score >= .6 ? "s-hot" : p.score >= .4 ? "s-warn" : "s-low";
+          return `<tr><td class="score ${cls}" style="white-space:nowrap">${pct(p.score)}<span class="meter"><i style="width:${pct(p.score)}"></i></span></td>
+            <td><b>${esc(p.sa)}</b> &harr; <b>${esc(p.sb)}</b><div class="reasons">${esc((p.reasons || []).slice(0, 2).join(" · "))}</div></td>
+            <td class="num">${pct(p.fp)}</td><td class="num">${pct(p.ast)}</td><td class="num">${p.z ? p.z.toFixed(1) : "–"}</td></tr>`;
+        }).join("")}</tbody></table>`;
+    $("#h-clusters").innerHTML = sm.clusters.length
+      ? sm.clusters.map(c => `<div class="notice warn" style="margin-bottom:6px"><b>${c.members.length} submissions</b> (mean ${pct(c.mean)}): ${c.members.map(esc).join(", ")}</div>`).join("") : "";
+  }
+
+  $("#h-copy").onclick = () => copyText($("#h-link"), $("#h-copy"), "Copy link");
+  $("#h-adminlink-copy").onclick = () => copyText($("#h-adminlink"), $("#h-adminlink-copy"), "Copy");
+  $("#h-adminlink-dismiss").onclick = () => { fresh = false; $("#h-adminlink-card").hidden = true; };
+  $("#h-name").addEventListener("change", e => jsonPost(api + "/settings", {name: e.target.value}, H).then(refresh));
+  $("#h-instructions").addEventListener("change", e => jsonPost(api + "/settings", {instructions: e.target.value}, H).then(refresh));
+  $("#h-accepting").addEventListener("change", e => jsonPost(api + "/settings", {accepting: e.target.checked}, H).then(refresh));
+  $("#h-thr").addEventListener("input", e => $("#h-thr-v").textContent = e.target.value + "%");
+  $("#h-run").onclick = async () => {
+    $("#h-run").disabled = true;
+    const res = await jsonPost(api + "/run", {threshold: +$("#h-thr").value / 100, lang: $("#h-lang").value || null}, H);
+    if (!res.ok){ const j = await res.json().catch(() => ({})); $("#h-run-msg").textContent = j.error || "Could not start."; }
+    lastSummary = null; refresh();
+  };
+  $("#h-upload").onclick = async () => {
+    $("#h-upload").disabled = true; $("#h-upload-msg").textContent = "Uploading…";
+    const res = await send(api + "/upload", {kind: "submissions"}, bulk.items, H, f => $("#h-upload-msg").textContent = `Uploading… ${Math.round(f * 100)}%`);
+    if (res.status === 201){
+      $("#h-upload-msg").textContent = `Added ${res.json.added.length}: ${res.json.added.slice(0, 6).join(", ")}${res.json.added.length > 6 ? "…" : ""}`;
+      bulk.clear();
+    } else { $("#h-upload-msg").textContent = res.json.error || "Upload failed."; $("#h-upload").disabled = false; }
+    refresh();
+  };
+  $("#h-skel-upload").onclick = async () => {
+    $("#h-skel-upload").disabled = true; $("#h-skel-msg").textContent = "Uploading…";
+    const res = await send(api + "/upload", {kind: "skeleton"}, skel.items, H);
+    $("#h-skel-msg").textContent = res.status === 201 ? `Using ${res.json.skeleton.length} file(s) as skeleton.` : (res.json.error || "Upload failed.");
+    if (res.status === 201) skel.clear(); else $("#h-skel-upload").disabled = false;
+    refresh();
+  };
+  $("#h-skel-clear").onclick = async () => {
+    await fetch(api + "/skeleton", {method: "DELETE", headers: {...H, "X-Mosaic": "1"}});
+    $("#h-skel-msg").textContent = "Skeleton removed."; refresh();
+  };
+  async function download(kind){
+    const res = await fetch(api + "/report." + kind, {headers: H, cache: "no-store"});
+    if (!res.ok){ alert("The report is not available."); return; }
+    const blob = await res.blob();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `${(state?.name || "mosaic").replace(/[^\w.-]+/g, "-").slice(0, 60)}-report.${kind}`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  }
+  $("#h-dl-html").onclick = () => download("html");
+  $("#h-dl-json").onclick = () => download("json");
+  $("#h-end").onclick = async () => {
+    const n = state ? state.uploads.length : 0;
+    if (!confirm(`Close this room?\n\nAll ${n} submission${n === 1 ? "" : "s"} and any reports will be deleted, and the room code will stop working. This can't be undone.`)) return;
+    const res = await jsonPost(api + "/end", {}, H).catch(() => null);
+    const j = res ? await res.json().catch(() => ({})) : {};
+    const k = j.discarded ?? n;
+    showEnded(`${k} submission${k === 1 ? " was" : "s were"} deleted along with any reports. The room code no longer works.`);
+  };
+
+  if (!token){ denied(); return; }
+  refresh();
+}
+</script>
+</body>
+</html>

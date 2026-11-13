@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+# reports and exports produced while testing locally
+*-report.html
+*-report.json
+mosaic-report.html
+report.html
+report.json
+out/
+.venv/
+venv/
+.claude/
