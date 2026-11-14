@@ -102,8 +102,8 @@ Each submission's MPKI is the mean over the traces (what `bpsim` prints as "aver
 Things to know:
 
 - **Small groups reveal individuals.** With one evaluated submission, the average *is* that person's MPKI; with two, each person can work out the other's from their own. With an odd number of submissions, the median is one person's actual score, though not whose. Comparing results before and after one person withdraws reveals that person's score. Evaluate once, after closing submissions, with a reasonable number of people.
-- **Traces.** By default rooms run on `bpsim/traces/`. Use `--bp-traces DIR` (`MOSAIC_BP_TRACES`) for others, such as hidden grading traces. Anything in a public repository is public; keep hidden traces out of it and mount them on the server instead.
-- **The rules checker and the include check are strong but not proof.** A determined student could still find C++ that reaches around them, for example to read the trace files while running. They would have no way to see the result, except through the network on hosts without namespace isolation.
+- **Traces.** Rooms run on the public traces in `bpsim/traces/`, the same ones students have. `--bp-traces DIR` (`MOSAIC_BP_TRACES`) points at a different folder if that is ever needed.
+- **The rules checker and the include check are strong but not proof.** A determined student could still find C++ that reaches around them, for example to read files while running. The traces are public anyway, and they would have no way to see anyone's result.
 
 | Predictor options | Default | |
 |---|---|---|
