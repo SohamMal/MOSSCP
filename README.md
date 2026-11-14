@@ -14,11 +14,12 @@ mosaic keeps MOSS's algorithm as one signal among five. It also judges every sco
 | **Compression distance (NCD)** | heavy but shallow obfuscation |
 | **Construct profile** | weak supporting evidence only |
 
-**Two scores, side by side.** Every pair shows its **mosaic score** (all five signals combined) and its **MOSS score** (winnowing-fingerprint overlap alone: the share of each file covered by shared passages, the number MOSS itself reports, with provided code excluded). The room dashboard and the report have a **Rank by: mosaic score / MOSS score** toggle; in the terminal use `--rank-by moss`. A pair is listed when either score reaches the threshold. A big gap between the two (high mosaic, low MOSS) is the signature of a rewritten copy.
+**Two scores, side by side.** Every pair shows its **mosaic score** (all five signals combined) and its **MOSS score** (winnowing-fingerprint overlap alone: the share of each file covered by shared passages, as MOSS measures it, except that provided code is left out of the file's size as well as the matches). The room dashboard and the report have a **Rank by: mosaic score / MOSS score** toggle; in the terminal use `--rank-by moss`. A pair is listed when either score reaches the threshold. A big gap between the two (high mosaic, low MOSS) is the signature of a rewritten copy.
 
 On top of the signals, at the cohort level:
 
-- **Automatic boilerplate suppression.** Material shared by more than 30% of submissions is treated as provided code. You don't need a base file (`--base` still works).
+- **Automatic boilerplate suppression.** Once there are 10 or more files, material shared by more than 30% of them is treated as provided code. You don't need a base file (`--base` still works).
+- **Scores measure the code each student wrote.** Provided code (detected or from `--base`) is left out of both the matched part and the file's size, so a pair that copied everything scores close to 100% however much skeleton the files carry. This also keeps a pair's score from dropping when more submissions arrive and the skeleton starts being recognised. Below about a dozen lines of own code (`min_own`, 120 tokens), a file is measured against that minimum instead, so a few coincidental lines don't read as a high percentage. Upload the skeleton as provided code anyway: then it is excluded from the very first check, even with fewer than 10 submissions.
 - **z-scores.** Each pair is scored against the cohort's own distribution, using the median and MAD. In a cohort where everyone writes similar code, 40% can be normal. In a diverse cohort it is unusual.
 - **Clusters.** Copy rings are grouped transitively, so six students sharing one solution show up as a single group instead of 15 separate pairs.
 - **Explanations.** Each flagged pair comes with reasons, for example *"structure matches although the text does not: rewritten, not retyped"*.

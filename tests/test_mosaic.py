@@ -351,6 +351,74 @@ class TestCohortStatistics(unittest.TestCase):
             if rep.pairs:
                 self.assertLess(max(p.fp for p in rep.pairs), 0.5)
 
+    def test_copied_pair_keeps_its_score_as_the_cohort_grows(self):
+        """Recognising the skeleton (from 10 submissions on) must not make a
+        full copy look less copied: scores are measured on each file's own
+        code, so new arrivals do not pull existing pairs down."""
+        import random
+
+        from mosaic.engine import run_sources
+
+        skeleton = (
+            "import sys\n\n\n"
+            "def parse_args(argv):\n"
+            "    if len(argv) < 2:\n"
+            "        print('usage: prog FILE')\n"
+            "        raise SystemExit(2)\n"
+            "    return argv[1]\n\n\n"
+            "def load(path):\n"
+            "    with open(path) as fh:\n"
+            "        return [line.strip() for line in fh if line.strip()]\n\n\n"
+        )
+        copied = (
+            "def solve(rows):\n"
+            "    best, seen = 0, {}\n"
+            "    for i, r in enumerate(rows):\n"
+            "        key = len(r) % 7\n"
+            "        if key in seen and i - seen[key] > best:\n"
+            "            best = i - seen[key]\n"
+            "        seen.setdefault(key, i)\n"
+            "    while best > 100:\n"
+            "        best //= 3\n"
+            "    return best\n\n\n"
+            "def report(rows, best):\n"
+            "    width = max((len(r) for r in rows), default=0)\n"
+            "    lines = []\n"
+            "    for i, r in enumerate(rows[:best]):\n"
+            "        if i % 2:\n"
+            "            lines.append(r.rjust(width, '.'))\n"
+            "        else:\n"
+            "            lines.append(r.upper()[: width // 2])\n"
+            "    return '\\n'.join(lines) or 'empty'\n"
+        )
+
+        def expr(r, depth):
+            if depth == 0:
+                return r.choice(["x", "y", "z", str(r.randrange(2, 50))])
+            op = r.choice(["+", "-", "*", "//", "%", "^", "|", "&", "<<"])
+            if r.random() < 0.25:
+                return f"{r.choice(['abs', 'min', 'max'])}({expr(r, depth - 1)}, {expr(r, depth - 1)})" \
+                    if r.random() < 0.5 else f"(-{expr(r, depth - 1)})"
+            return f"({expr(r, depth - 1)} {op} {expr(r, depth - 1)})"
+
+        def own(i):
+            r = random.Random(1000 + i)
+            return "".join(f"def f{j}(x, y, z):\n    return {expr(r, 4)}\n\n\n" for j in range(3))
+
+        def copy_scores(n):
+            subs = [("alice", skeleton + copied), ("bob", skeleton + copied.replace("best", "longest"))]
+            subs += [(f"s{i:02d}", skeleton + own(i)) for i in range(n - 2)]
+            rep = run_sources([(s, "a.py", c.encode()) for s, c in subs], engine.Config(by_dir=True))
+            p = next(p for p in rep.pairs if {p.a.submission, p.b.submission} == {"alice", "bob"})
+            return p.score, p.moss, rep.cohort.suppressed_fp
+
+        small, large = copy_scores(5), copy_scores(16)
+        self.assertEqual(small[2], 0)  # no suppression yet ...
+        self.assertGreater(large[2], 0)  # ... then the skeleton is recognised
+        self.assertGreaterEqual(large[0], small[0] - 0.02)
+        self.assertGreaterEqual(large[1], small[1] - 0.05)
+        self.assertGreater(large[1], 0.85)
+
 
 class TestReportOutput(unittest.TestCase):
     @classmethod

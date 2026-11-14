@@ -25,6 +25,11 @@ class Config:
     min_subtree: int = DEFAULT_MIN_SUBTREE
     max_df: float = 0.30  # drop fingerprints seen in more than this share of docs
     min_tokens: int = 40  # ignore files smaller than this
+    # Scores are a share of each file's own code (provided/cohort-wide
+    # material left out). Below this many tokens of own code, divide by this
+    # instead, so a few coincidental lines in a file that is almost all
+    # skeleton do not read as a high percentage.
+    min_own: int = 120
     max_gap: int = 48  # token gap tolerated inside one matched passage
     threshold: float = 0.25  # report pairs whose mosaic or MOSS score reaches this
     cluster_threshold: float = 0.45
@@ -213,6 +218,21 @@ class Cohort:
     tree_df: Counter = field(default_factory=Counter)
     suppressed_fp: int = 0
     suppressed_tree: int = 0
+    # Per document (keyed by id): the token ranges and structure nodes that
+    # are provided or cohort-wide material. Scores are measured against the
+    # rest -- the code the student actually wrote -- so a pair's score does
+    # not drop just because more submissions arrive and the skeleton starts
+    # being recognised.
+    supp_spans: dict[int, list[tuple[int, int]]] = field(default_factory=dict)
+    supp_nodes: dict[int, set[int]] = field(default_factory=dict)
+
+    def own_tokens(self, d: "Document") -> tuple[list[tuple[int, int]], int]:
+        spans = self.supp_spans.get(id(d), [])
+        return spans, d.n_tokens - covered(spans)
+
+    def own_nodes(self, d: "Document") -> tuple[set[int], int]:
+        nodes = self.supp_nodes.get(id(d), set())
+        return nodes, (d.tidx.total if d.tidx else 0) - len(nodes)
 
 
 def build_cohort(docs: list[Document], cfg: Config, base_docs: Iterable[Document] = ()) -> Cohort:
@@ -240,7 +260,51 @@ def build_cohort(docs: list[Document], cfg: Config, base_docs: Iterable[Document
             co.ignore_tree |= b.tidx.hashes
     co.suppressed_fp = len(co.ignore_fp)
     co.suppressed_tree = len(co.ignore_tree)
+    for d in docs:
+        if co.ignore_fp:
+            # w <= k, so consecutive winnowed k-grams of a suppressed passage
+            # overlap and their union covers the passage.
+            spans = [(p, p + d.fp.k) for h, ps in d.fp.index.items() if h in co.ignore_fp for p in ps]
+            if spans:
+                co.supp_spans[id(d)] = spans + _short_gaps(spans, d.n_tokens, d.fp.k + cfg.w - 1)
+        if co.ignore_tree and d.tidx:
+            nodes: set[int] = set()
+            for h, ns in d.tidx.bag.items():
+                if h in co.ignore_tree:
+                    for n in ns:
+                        if id(n) not in nodes:
+                            nodes.update(id(x) for x in structure.walk(n))
+            if nodes:
+                co.supp_nodes[id(d)] = nodes
     return co
+
+
+def _short_gaps(spans: list[tuple[int, int]], n: int, min_len: int) -> list[tuple[int, int]]:
+    """Stretches between provided passages (or the file's ends) too short
+    for winnowing to ever fingerprint. Nothing in them can be matched, so
+    they are left out of the file's own size too -- e.g. a two-line header
+    above the skeleton."""
+    merged: list[list[int]] = []
+    for s, e in sorted(spans):
+        if merged and s <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], e)
+        else:
+            merged.append([s, e])
+    out, prev = [], 0
+    for s, e in merged + [[n, n]]:
+        if 0 < s - prev < min_len:
+            out.append((prev, s))
+        prev = max(prev, e)
+    return out
+
+
+def _own_share(matched: int, own: int, total: int, floor: int) -> float:
+    """Share of a document's own (non-provided) material that is matched.
+    The floor keeps a file that is almost all skeleton from scoring 100% on
+    a few shared lines."""
+    if total <= 0:
+        return 0.0
+    return min(1.0, matched / max(1, own, min(floor, total)))
 
 
 def candidate_pairs(docs: list[Document], co: Cohort) -> set[tuple[int, int]]:
@@ -285,13 +349,23 @@ def score_pair(a: Document, b: Document, co: Cohort, cfg: Config) -> Pair:
     if hits:
         p.blocks = [bl for bl in chain_blocks(hits, cfg.k, cfg.max_gap) if bl.n_fp >= 2 or bl.len_a >= cfg.k * 2]
         if p.blocks:
-            p.fp_a = covered((bl.a0, bl.a1) for bl in p.blocks) / max(1, a.n_tokens)
-            p.fp_b = covered((bl.b0, bl.b1) for bl in p.blocks) / max(1, b.n_tokens)
+            for side, d, spans_of in (("a", a, lambda bl: (bl.a0, bl.a1)), ("b", b, lambda bl: (bl.b0, bl.b1))):
+                supp, own = co.own_tokens(d)
+                matched = [spans_of(bl) for bl in p.blocks]
+                # count only matched tokens outside provided material
+                hit = covered(matched + supp) - covered(supp) if supp else covered(matched)
+                setattr(p, f"fp_{side}", _own_share(hit, own, d.n_tokens, cfg.min_own))
 
     if a.tidx and b.tidx:
         p.tree_matches = structure.match_trees(a.tidx, b.tidx, co.ignore_tree)
         if p.tree_matches:
-            p.ast_a, p.ast_b = structure.coverage(p.tree_matches, a.tidx.total, b.tidx.total)
+            for side, d, root_of in (("a", a, lambda m: m.a), ("b", b, lambda m: m.b)):
+                supp, own = co.own_nodes(d)
+                if supp:
+                    hit = sum(1 for m in p.tree_matches for x in structure.walk(root_of(m)) if id(x) not in supp)
+                else:
+                    hit = sum(m.size for m in p.tree_matches)
+                setattr(p, f"ast_{side}", _own_share(hit, own, d.tidx.total, cfg.min_own))
 
     p.ncd = signals.ncd_similarity(a.blob, b.blob, a.cblob, b.cblob)
     p.prof = signals.profile_similarity(a.prof, b.prof)
