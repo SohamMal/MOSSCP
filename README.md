@@ -108,7 +108,9 @@ The site lives at `https://<service-name>.onrender.com`, and every push to the r
 
 About Render's free plan:
 
-- **It sleeps after about 15 minutes with no visitors**, and sleeping restarts the server, which **closes every open room**. The first visit afterwards takes 30–60 seconds while it wakes. While a room is collecting submissions, peers keep it awake; run the check before everyone leaves. A paid instance ($7/month) never sleeps.
+- **Rooms last as long as you set.** Render's free plan puts a service to sleep after 15 minutes without visitors, and sleeping would restart the server and close every room. To prevent that, while at least one room is open mosaic requests its own public address every 10 minutes, so a room set to 4 hours stays open for 4 hours even if nobody visits. When no rooms are open the pings stop and Render may let it sleep; the first visit afterwards takes 30–60 seconds. This is on by default on Render (`--keep-awake` / `MOSAIC_KEEP_AWAKE=1` elsewhere, `--no-keep-awake` to turn it off).
+- **A restart still closes every room.** Rooms live only in memory, so a redeploy (every push, with `autoDeploy`) or a rare platform restart drops them. Avoid pushing while a room is in use.
+- **Free hours.** The free plan gives 750 instance hours a month, enough for one service running around the clock.
 - **512 MB of memory.** The blueprint caps uploads at 250 MB in total (120 MB per room, 15 rooms), which is plenty for source code.
 - **Run exactly one instance.** Rooms live in that instance's memory.
 
@@ -124,6 +126,7 @@ About Render's free plan:
 | `--max-room-hours` | 24 | longest a room may stay open |
 | `--max-upload-mb` | 25 | per peer upload |
 | `--max-room-mb` / `--max-total-mb` | 512 / 2048 | memory budgets per room and overall (`MOSAIC_MAX_ROOM_MB`, `MOSAIC_MAX_TOTAL_MB`) |
+| `--keep-awake` | on on Render | while rooms are open, ping the public URL every 10 minutes so free hosts don't sleep (`MOSAIC_KEEP_AWAKE`) |
 | `--behind-proxy` | off (on in Docker) | trust `X-Forwarded-For` for rate limiting |
 
 Safeguards:

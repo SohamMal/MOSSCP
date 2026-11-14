@@ -1121,6 +1121,40 @@ def watch_expiry(srv: RoomServer, interval: float = 15.0, log=print) -> None:
             log(f"  room {display_code(code)} expired -- its files were deleted")
 
 
+KEEP_AWAKE_SECONDS = 10 * 60  # Render's free plan sleeps after 15 idle minutes
+
+
+def _ping(url: str) -> None:
+    import urllib.request
+
+    req = urllib.request.Request(url, headers={"User-Agent": "mosaic-keep-awake"})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        resp.read()
+
+
+def keep_awake(srv: RoomServer, interval: float = KEEP_AWAKE_SECONDS, ping=_ping, log=print) -> None:
+    """While any room is open, request our own public address now and then.
+
+    Free hosts such as Render put a service to sleep after a stretch with no
+    inbound traffic, and sleeping restarts the process, which wipes every
+    room. Going out through the public URL counts as a visit, so a room
+    lives for the time its admin chose. With no rooms open the pings stop
+    and the host may sleep as usual -- nothing would be lost.
+    """
+    if not srv.public_url:
+        return
+    url = srv.public_url + "/api/health"
+    while not srv.stopping.wait(interval):
+        with srv.hub.lock:
+            busy = bool(srv.hub.rooms)
+        if not busy:
+            continue
+        try:
+            ping(url)
+        except Exception as exc:  # a missed ping is retried next round
+            log(f"  keep-awake ping failed: {exc}")
+
+
 def _env_int(name: str, default: int) -> int:
     try:
         return int(os.environ.get(name, default))
@@ -1157,6 +1191,10 @@ def main(argv: list[str] | None = None) -> int:
                    help="memory budget per room")
     p.add_argument("--max-total-mb", type=int, default=_env_int("MOSAIC_MAX_TOTAL_MB", 2048),
                    help="memory budget for the whole server")
+    p.add_argument("--keep-awake", action=argparse.BooleanOptionalAction,
+                   default=env.get("MOSAIC_KEEP_AWAKE", "1" if on_render else "0") == "1",
+                   help="while rooms are open, ping the public URL every 10 minutes so a free "
+                        "host does not put the server to sleep (on by default on Render)")
     p.add_argument("--open", action="store_true", help="open the create-room page in your browser")
     args = p.parse_args(argv)
 
@@ -1193,6 +1231,14 @@ def main(argv: list[str] | None = None) -> int:
     print()
 
     threading.Thread(target=watch_expiry, args=(srv,), daemon=True).start()
+    if args.keep_awake:
+        if srv.public_url:
+            threading.Thread(target=keep_awake, args=(srv,), daemon=True, name="mosaic-keep-awake").start()
+            print("  Keep-awake is on: while a room is open the server pings itself so it does not sleep.")
+            print()
+        else:
+            print("  --keep-awake needs --public-url (or MOSAIC_PUBLIC_URL); it is off.")
+            print()
     if args.open:
         webbrowser.open(local + "/create")
     try:

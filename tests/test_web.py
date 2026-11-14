@@ -405,6 +405,31 @@ class TestClosing(ServerCase):
         self.assertIsNone(self.hub.get(code))
         self.assertEqual(room.uploads, {})
 
+    def test_keep_awake_pings_only_while_rooms_are_open(self):
+        hits: list[str] = []
+        stop = threading.Event()
+        old_url, self.srv.public_url = self.srv.public_url, "https://example.invalid"
+        old_stop, self.srv.stopping = self.srv.stopping, stop
+        try:
+            t = threading.Thread(target=web.keep_awake, args=(self.srv, 0.05, hits.append, lambda *_: None),
+                                 daemon=True)
+            t.start()
+            time.sleep(0.3)
+            self.assertEqual(hits, [])  # no rooms: let the host sleep
+            code, _ = self.create()
+            deadline = time.time() + 5
+            while not hits and time.time() < deadline:
+                time.sleep(0.05)
+            self.assertIn("https://example.invalid/api/health", hits)
+            self.hub.close(code)
+            time.sleep(0.15)
+            n = len(hits)
+            time.sleep(0.3)
+            self.assertEqual(len(hits), n)
+        finally:
+            stop.set()
+            self.srv.public_url, self.srv.stopping = old_url, old_stop
+
     def test_shutdown_deletes_everything(self):
         code, _ = self.create()
         self.submit(code, "x", corpus_files("s01_original"))
