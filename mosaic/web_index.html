@@ -155,7 +155,7 @@ details>summary{cursor:pointer;color:var(--muted);font-size:.86rem}
       </form>
       <div class="card stack">
         <h2 style="margin:0">Run a room</h2>
-        <p class="muted small" style="margin:0">Create a room, share its code, and run the check once everyone has uploaded. You choose whether submitted code can be viewed in the report.</p>
+        <p class="muted small" style="margin:0">Create a room, share its code, and run the check once everyone has uploaded. Rooms either check code for similarity or evaluate branch predictors and publish only the class average and median MPKI.</p>
         <a class="btn primary" href="/create">Create a room</a>
       </div>
     </div>
@@ -176,6 +176,17 @@ details>summary{cursor:pointer;color:var(--muted);font-size:.86rem}
         <input type="text" id="c-name" maxlength="120" required placeholder="e.g. COL7001 Assignment 3">
       </label>
       <div>
+        <div class="small muted" style="margin-bottom:6px">What is this room for?</div>
+        <div class="choice" role="radiogroup">
+          <label><input type="radio" name="kind" value="similarity" checked>
+            <b>Similarity check</b><span>Peers upload their code and you check it for copying, like MOSS.</span></label>
+          <label id="c-kind-bp"><input type="radio" name="kind" value="predictor">
+            <b>Predictor MPKI</b><span>Peers upload <span class="mono">mine.cpp</span>. The server builds and runs each one on its traces and shows only the class average and median MPKI.</span></label>
+        </div>
+        <div id="c-bp-note" class="notice priv small" style="margin-top:8px" hidden>Nobody sees anyone's code or any individual MPKI: not you, not other peers, not even the submitter. Each <span class="mono">mine.cpp</span> is deleted as soon as it is compiled.</div>
+        <div id="c-bp-off" class="notice warn small" style="margin-top:8px" hidden></div>
+      </div>
+      <div id="c-privacy-wrap">
         <div class="small muted" style="margin-bottom:6px">Can people see submitted code in the report?</div>
         <div class="choice" role="radiogroup">
           <label><input type="radio" name="privacy" value="private">
@@ -217,7 +228,8 @@ details>summary{cursor:pointer;color:var(--muted);font-size:.86rem}
     <div id="p-receipt" class="card stack" hidden>
       <div class="row"><span class="check">&#10003;</span><h2 style="margin:0">Submitted</h2></div>
       <p style="margin:0" id="p-receipt-text"></p>
-      <details><summary>Files received</summary><ul class="filelist" id="p-receipt-files"></ul></details>
+      <div id="p-build" class="notice small" hidden></div>
+      <details id="p-receipt-files-wrap"><summary>Files received</summary><ul class="filelist" id="p-receipt-files"></ul></details>
       <div class="row">
         <button id="p-replace">Replace my submission</button>
         <button class="danger" id="p-withdraw">Withdraw</button>
@@ -226,20 +238,26 @@ details>summary{cursor:pointer;color:var(--muted);font-size:.86rem}
 
     <div id="p-closed" class="notice warn" hidden>The host isn't accepting submissions right now.</div>
 
+    <section id="p-results" class="card stack" hidden>
+      <h2 style="margin:0">Class results</h2>
+      <div class="tiles" id="p-tiles"></div>
+      <p class="muted small" style="margin:0" id="p-results-note"></p>
+    </section>
+
     <form id="p-form" class="card stack" hidden autocomplete="off">
       <h2 id="p-form-title">Upload your code</h2>
       <label class="field"><span>Your name or roll number</span>
         <input type="text" id="p-label" maxlength="60" required placeholder="e.g. 2025CS10123 Priya">
       </label>
       <div class="drop" id="p-drop">
-        <div class="big">Drop your project folder or a .zip here</div>
-        <div class="muted small">Only source files are sent. Other files are left out.</div>
+        <div class="big" id="p-drop-title">Drop your project folder or a .zip here</div>
+        <div class="muted small" id="p-drop-sub">Only source files are sent. Other files are left out.</div>
         <div class="row">
-          <button type="button" data-pick="folder">Choose folder</button>
-          <button type="button" data-pick="files">Choose files or .zip</button>
+          <button type="button" data-pick="folder" id="p-pick-folder">Choose folder</button>
+          <button type="button" data-pick="files" id="p-pick-files">Choose files or .zip</button>
         </div>
         <input type="file" data-input="folder" webkitdirectory multiple hidden>
-        <input type="file" data-input="files" multiple hidden>
+        <input type="file" data-input="files" multiple hidden id="p-input-files">
         <div data-summary class="small" style="margin-top:10px"></div>
         <ul class="filelist" data-list></ul>
       </div>
@@ -251,7 +269,7 @@ details>summary{cursor:pointer;color:var(--muted);font-size:.86rem}
       </div>
     </form>
 
-    <p class="muted small">Files are held only in the room's memory, never saved to disk, and deleted when the host closes the room. Other participants can't see your files.</p>
+    <p class="muted small" id="p-foot">Files are held only in the room's memory, never saved to disk, and deleted when the host closes the room. Other participants can't see your files.</p>
   </div>
 </main>
 
@@ -306,7 +324,8 @@ details>summary{cursor:pointer;color:var(--muted);font-size:.86rem}
       <section class="card stack">
         <div class="row"><h2 style="margin:0">Submissions <span id="h-count" class="muted"></span></h2><span class="spacer"></span><span id="h-mem" class="muted small"></span></div>
         <div class="tablewrap" id="h-table"></div>
-        <details>
+        <div id="h-builds" class="small muted" hidden></div>
+        <details id="h-add-details">
           <summary>Add submissions yourself</summary>
           <div class="stack" style="margin-top:10px">
             <div class="drop compact" id="h-drop">
@@ -322,7 +341,7 @@ details>summary{cursor:pointer;color:var(--muted);font-size:.86rem}
             <div class="row"><button class="primary" id="h-upload" disabled>Add</button><span id="h-upload-msg" class="small muted"></span></div>
           </div>
         </details>
-        <details>
+        <details id="h-skel-details">
           <summary>Provided skeleton code (optional) <span id="h-skel-count"></span></summary>
           <div class="stack" style="margin-top:10px">
             <p class="muted small" style="margin:0">Code you handed out is ignored when comparing. Code shared by most submissions is ignored automatically anyway.</p>
@@ -342,7 +361,21 @@ details>summary{cursor:pointer;color:var(--muted);font-size:.86rem}
         </details>
       </section>
 
-      <section class="card stack">
+      <section class="card stack" id="h-bp" hidden>
+        <h2 style="margin:0">MPKI evaluation</h2>
+        <p class="muted small" style="margin:0" id="h-bp-text"></p>
+        <div class="row"><button class="primary" id="h-bp-run">Evaluate</button><span id="h-bp-msg" class="small muted"></span></div>
+        <div id="h-bp-progress" hidden><div class="bar"><i></i></div><div class="muted small" style="margin-top:4px" data-text></div></div>
+        <div id="h-bp-stale" class="notice warn" hidden>Submissions have changed since this evaluation. Run it again to include them.</div>
+        <div id="h-bp-error" class="notice hot" hidden></div>
+        <div id="h-bp-results" class="stack" hidden>
+          <div class="tiles" id="h-bp-tiles"></div>
+          <details><summary>By trace (class average and median)</summary><div class="tablewrap" id="h-bp-traces" style="margin-top:8px"></div></details>
+        </div>
+        <div class="notice priv small">Only class-wide numbers are computed. No per-student MPKI is stored or shown, to you or anyone. Programs are run anonymously in random order.</div>
+      </section>
+
+      <section class="card stack" id="h-sim">
         <h2 style="margin:0">Similarity check</h2>
         <div class="row">
           <label class="field" style="flex:1;min-width:180px"><span>Report pairs scoring at least <b id="h-thr-v">25%</b></span>
@@ -511,6 +544,16 @@ function jsonPost(url, body, headers){
   return fetch(url, {method: "POST", headers: {"X-Mosaic": "1", "Content-Type": "application/json", ...(headers || {})}, body: JSON.stringify(body || {})});
 }
 
+const fmtMpki = v => v == null ? "–" : Number(v).toFixed(3);
+function bpTiles(sm){
+  const t = [[sm.evaluated, "evaluated"]];
+  if (sm.mpki) t.push([fmtMpki(sm.mpki.mean), "average MPKI"], [fmtMpki(sm.mpki.median), "median MPKI"]);
+  t.push([sm.traces, "traces"]);
+  if (sm.failed) t.push([sm.failed, "failed to run"]);
+  if (sm.not_built) t.push([sm.not_built, "did not build"]);
+  return t.map(([n, l]) => `<div class="tile"><b>${esc(n)}</b><span>${esc(l)}</span></div>`).join("");
+}
+
 /* ---------------- routing ---------------- */
 const path = location.pathname.replace(/\/+$/, "") || "/";
 let m;
@@ -546,7 +589,7 @@ function landingView(){
     if (!res || !res.ok){ store.del(k); return null; }
     const s = await res.json();
     return `<a href="/room/${esc(showCode(code))}"><span class="mono">${esc(showCode(code))}</span><span>${esc(s.name)}</span><span class="spacer"></span>
-      <span class="pill ${s.private ? "priv" : ""}">${s.private ? "Hidden" : "Visible"}</span><span class="muted small">${s.uploads.length} submitted</span></a>`;
+      <span class="pill ${s.private ? "priv" : ""}">${s.kind === "predictor" ? "Predictor MPKI" : s.private ? "Hidden" : "Visible"}</span><span class="muted small">${s.uploads.length} submitted</span></a>`;
   })).then(rows => { rows = rows.filter(Boolean); if (rows.length){ list.innerHTML = rows.join(""); $("#l-mine").hidden = false; } });
 }
 
@@ -561,14 +604,28 @@ async function createView(){
   sel.value = cfg.durations.includes(4) ? "4" : String(cfg.durations[cfg.durations.length - 1]);
   $("#c-key-wrap").hidden = !cfg.create_key_required;
   $("#c-key").required = !!cfg.create_key_required;
+  const bp = cfg.predictor || {available: false, problem: "not supported by this server"};
+  const bpRadio = document.querySelector('input[name="kind"][value="predictor"]');
+  if (!bp.available){
+    bpRadio.disabled = true; $("#c-kind-bp").style.opacity = ".55"; $("#c-kind-bp").style.cursor = "not-allowed";
+    $("#c-bp-off").textContent = "Predictor rooms are unavailable on this server: " + (bp.problem || "unknown reason") + ".";
+  }
+  const syncKind = () => {
+    const isBp = bpRadio.checked;
+    $("#c-privacy-wrap").hidden = isBp; $("#c-bp-note").hidden = !isBp;
+    $("#c-bp-off").hidden = bp.available || !isBp;
+  };
+  document.querySelectorAll('input[name="kind"]').forEach(r => r.addEventListener("change", syncKind));
+  syncKind();
 
   $("#c-form").addEventListener("submit", async e => {
     e.preventDefault();
     const err = $("#c-err"); err.hidden = true;
-    const privacy = (document.querySelector('input[name="privacy"]:checked') || {}).value;
+    const kind = (document.querySelector('input[name="kind"]:checked') || {}).value || "similarity";
+    const privacy = kind === "predictor" ? "private" : (document.querySelector('input[name="privacy"]:checked') || {}).value;
     if (!privacy){ err.textContent = "Choose whether code is hidden or visible in the report."; err.hidden = false; return; }
     $("#c-submit").disabled = true;
-    const res = await jsonPost("/api/rooms", {name: $("#c-name").value.trim(), privacy, hours: +sel.value, key: $("#c-key").value});
+    const res = await jsonPost("/api/rooms", {name: $("#c-name").value.trim(), kind, privacy, hours: +sel.value, key: $("#c-key").value});
     const j = await res.json().catch(() => ({}));
     if (res.status !== 201){ err.textContent = j.error || "Could not create the room."; err.hidden = false; $("#c-submit").disabled = false; return; }
     const code = normCode(j.code);
@@ -606,15 +663,30 @@ function peerView(code){
     $("#p-status").innerHTML = info.accepting ? '<span class="pill ok"><span class="dot"></span>Open</span>' : '<span class="pill warn"><span class="dot"></span>Closed</span>';
     $("#p-deadline").textContent = info.expires ? `· closes in ${fmtDur(info.expires - info.now)}` : "";
     const pv = $("#p-privacy");
+    const isBp = info.kind === "predictor";
     pv.className = "notice small " + (info.private ? "priv" : "info");
-    pv.innerHTML = info.private
+    pv.innerHTML = isBp
+      ? `<b>Private evaluation.</b> Upload your <span class="mono">mine.cpp</span>. The server compiles it, deletes the source, and runs it on the course traces. Nobody sees your code or your MPKI: not the host, not other peers, not you. Only the class average and median are published.`
+      : info.private
       ? "<b>Code hidden.</b> Nobody, including the host, can read your code. The report shows only how similar submissions are."
       : "<b>Code visible.</b> The host can read submitted code in the similarity report.";
+    if (isBp){
+      $("#p-drop-title").innerHTML = 'Drop your <span class="mono">mine.cpp</span> here';
+      $("#p-drop-sub").textContent = "Only this one file is used. Run tools/check_rules.py on it first.";
+      $("#p-pick-folder").hidden = true; $("#p-pick-files").textContent = "Choose mine.cpp";
+      $("#p-input-files").removeAttribute("multiple"); $("#p-input-files").accept = ".cpp";
+      $("#p-receipt-files-wrap").hidden = true;
+      $("#p-foot").textContent = "Your source is kept in the server's memory only until it is compiled, then deleted. The compiled program is deleted when the host closes the room. Individual results are never stored.";
+      renderResults();
+    }
     $("#p-closed").hidden = info.accepting;
     const showReceipt = !!r && !replacing;
     $("#p-receipt").hidden = !showReceipt;
     if (r){
-      $("#p-receipt-text").innerHTML = `As <b>${esc(r.label)}</b>: ${r.files.length} file${r.files.length === 1 ? "" : "s"}, ${fmtBytes(r.bytes)}, at ${fmtTime(r.at)}.`;
+      $("#p-receipt-text").innerHTML = isBp
+        ? `As <b>${esc(r.label)}</b>: <span class="mono">mine.cpp</span>, ${fmtBytes(r.bytes)}, at ${fmtTime(r.at)}.`
+        : `As <b>${esc(r.label)}</b>: ${r.files.length} file${r.files.length === 1 ? "" : "s"}, ${fmtBytes(r.bytes)}, at ${fmtTime(r.at)}.`;
+      if (isBp) renderBuild(r);
       $("#p-receipt-files").innerHTML = r.files.map(f => `<li>${esc(f)}</li>`).join("");
       $("#p-replace").disabled = !info.accepting;
     }
@@ -623,6 +695,42 @@ function peerView(code){
     $("#p-submit").textContent = replacing ? "Replace submission" : "Submit";
     $("#p-cancel-replace").hidden = !replacing;
     validate();
+  }
+  let build = null, buildTimer = null;
+  function renderBuild(r){
+    const box = $("#p-build"); box.hidden = false;
+    const b = build || {status: "queued", messages: []};
+    const st = b.status;
+    if (st === "ready"){
+      box.className = "notice small ok";
+      box.innerHTML = `<b>Built and ready.</b> Your predictor uses ${(b.bits ?? 0).toLocaleString()} of 65,536 bits. It will be included when the host runs the evaluation.`;
+    } else if (st === "failed"){
+      box.className = "notice small hot";
+      box.innerHTML = `<b>Not accepted.</b> Fix this and replace your submission:<pre class="mono" style="white-space:pre-wrap;margin:6px 0 0;max-height:260px;overflow:auto">${esc((b.messages || []).join("\n"))}</pre>`;
+    } else {
+      box.className = "notice small info";
+      box.innerHTML = st === "building" ? "Building your predictor&hellip;" : "Waiting to be built&hellip;";
+    }
+    clearTimeout(buildTimer);
+    if (st !== "ready" && st !== "failed") buildTimer = setTimeout(() => pollBuild(r), 2500);
+  }
+  async function pollBuild(r){
+    const cur = store.get(KEY); if (!cur || cur.id !== r.id) return;
+    try {
+      const res = await fetch(`${api}/submit/${r.id}`, {headers: {"X-Mosaic-Receipt": r.receipt}, cache: "no-store"});
+      if (res.status === 404){ store.del(KEY); build = null; render(); return; }
+      if (res.ok) build = await res.json();
+    } catch {}
+    if (!replacing) renderBuild(r);
+  }
+  function renderResults(){
+    const box = $("#p-results"), res = info.results;
+    box.hidden = !res;
+    if (!res) return;
+    const sm = res.summary;
+    $("#p-tiles").innerHTML = bpTiles(sm);
+    $("#p-results-note").textContent = `Evaluated at ${fmtTime(res.finished)}.` + (res.stale ? " Submissions have changed since then." : "")
+      + " Only these class-wide numbers exist; no individual MPKI is kept.";
   }
   async function load(){
     try {
@@ -650,6 +758,7 @@ function peerView(code){
     prog.hidden = true;
     if (res.status === 201){
       store.set(KEY, {id: res.json.id, receipt: res.json.receipt, label: res.json.label, files: res.json.files, bytes: res.json.bytes, at: res.json.at});
+      build = res.json.build || null;
       replacing = false; picker.clear(); render();
       if (res.json.warnings?.length) $("#p-receipt-text").innerHTML += `<br><span class="s-warn small">${res.json.warnings.map(esc).join("<br>")}</span>`;
     } else {
@@ -663,9 +772,14 @@ function peerView(code){
     const r = store.get(KEY); if (!r) return;
     if (!confirm("Withdraw your submission? Your files will be deleted from the room.")) return;
     const res = await fetch(`${api}/submit/${r.id}`, {method: "DELETE", headers: {"X-Mosaic": "1", "X-Mosaic-Receipt": r.receipt}});
-    if (res.ok || res.status === 404){ store.del(KEY); replacing = false; render(); }
+    if (res.ok || res.status === 404){ store.del(KEY); build = null; clearTimeout(buildTimer); replacing = false; render(); }
   };
-  load().then(ok => { if (ok) setInterval(load, 20000); });
+  load().then(ok => {
+    if (!ok) return;
+    setInterval(load, 20000);
+    const r = store.get(KEY);
+    if (r && info.kind === "predictor") pollBuild(r);
+  });
 }
 
 /* ================================ admin ================================ */
@@ -714,7 +828,10 @@ function hostView(code){
     $("#h-body").hidden = false;
     if (document.activeElement !== $("#h-name")) $("#h-name").value = s.name;
     if (document.activeElement !== $("#h-instructions")) $("#h-instructions").value = s.instructions || "";
-    $("#h-privacy").innerHTML = s.private
+    const isBp = s.kind === "predictor";
+    $("#h-privacy").innerHTML = isBp
+      ? '<span class="pill priv" title="Code and individual results are never shown">Predictor MPKI &middot; private</span>'
+      : s.private
       ? '<span class="pill priv" title="Chosen when the room was created; cannot be changed">Code hidden &middot; locked</span>'
       : '<span class="pill" title="Chosen when the room was created; cannot be changed">Code visible &middot; locked</span>';
     $("#h-accepting").checked = s.accepting;
@@ -739,6 +856,7 @@ function hostView(code){
     }
 
     $("#h-count").textContent = s.uploads.length ? `(${s.uploads.length})` : "";
+    if (isBp){ renderBp(s); return; }
     $("#h-mem").textContent = `${fmtBytes(s.total_bytes)} in memory`;
     if (!s.uploads.length){
       $("#h-table").innerHTML = '<div class="empty">No submissions yet. Share the room code.</div>';
@@ -781,6 +899,55 @@ function hostView(code){
       + (s.private ? "" : " Nothing is written to disk unless you download a report.");
     if (a.status === "done") renderResults(a.summary);
   }
+
+  function renderBp(s){
+    ["#h-add-details", "#h-skel-details", "#h-sim", "#h-results"].forEach(x => $(x).hidden = true);
+    $("#h-bp").hidden = false; $("#h-mem").textContent = "";
+    if (document.activeElement !== $("#h-instructions")) $("#h-instructions").placeholder = "e.g. Upload your Part B mine.cpp. Run tools/check_rules.py first.";
+    if (!s.uploads.length){
+      $("#h-table").innerHTML = '<div class="empty">No submissions yet. Share the room code.</div>';
+    } else {
+      $("#h-table").innerHTML = `<table><thead><tr><th>Name</th><th class="num">Received</th><th></th></tr></thead><tbody>${
+        s.uploads.map(u => `<tr><td class="name">${esc(u.label)}</td><td class="num">${fmtTime(u.updated)}</td>
+          <td class="num"><button class="ghost" data-del="${esc(u.id)}" title="Remove" aria-label="Remove ${esc(u.label)}">&times;</button></td></tr>`).join("")
+      }</tbody></table>`;
+      $("#h-table").querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
+        const u = s.uploads.find(x => x.id === b.dataset.del);
+        if (!confirm(`Remove ${u ? u.label : "this submission"}? Its program is deleted.`)) return;
+        await fetch(api + "/uploads/" + b.dataset.del, {method: "DELETE", headers: {...H, "X-Mosaic": "1"}});
+        refresh();
+      });
+    }
+    const c = s.builds || {};
+    const busy = (c.queued || 0) + (c.building || 0);
+    $("#h-builds").hidden = !s.uploads.length;
+    $("#h-builds").textContent = `${c.ready || 0} built and ready · ${busy} building · ${c.failed || 0} not accepted (each submitter sees their own reason). Per-student status is not shown.`;
+    $("#h-bp-text").textContent = `Runs every built mine.cpp on ${s.traces.length} trace${s.traces.length === 1 ? "" : "s"} (${s.traces.join(", ")}) and reports the class average and median of each submission's mean MPKI.`;
+    const a = s.analysis, running = a.status === "running";
+    $("#h-bp-run").disabled = running || !(c.ready > 0);
+    $("#h-bp-msg").textContent = running ? "" : !(c.ready > 0) ? "Waiting for at least one submission to build." : busy ? `${busy} still building; they'll be left out if you run now.` : "";
+    if (running) setBar($("#h-bp-progress"), a.total ? a.done / a.total : 0, `Running submissions… ${a.done}/${a.total}`);
+    else $("#h-bp-progress").hidden = true;
+    $("#h-bp-error").hidden = a.status !== "error";
+    if (a.status === "error") $("#h-bp-error").textContent = "The evaluation failed: " + a.error;
+    $("#h-bp-stale").hidden = !(a.status === "done" && a.stale);
+    $("#h-bp-results").hidden = a.status !== "done";
+    if (a.status === "done"){
+      const sm = a.summary;
+      $("#h-bp-tiles").innerHTML = bpTiles(sm);
+      $("#h-bp-traces").innerHTML = (sm.per_trace || []).length
+        ? `<table><thead><tr><th>Trace</th><th class="num">Average MPKI</th><th class="num">Median MPKI</th></tr></thead><tbody>${
+          sm.per_trace.map(t => `<tr><td class="mono">${esc(t.trace)}</td><td class="num">${fmtMpki(t.mean)}</td><td class="num">${fmtMpki(t.median)}</td></tr>`).join("")}</tbody></table>`
+        : '<div class="empty">No submission ran successfully.</div>';
+    }
+    $("#h-footnote").textContent = "Each mine.cpp is deleted from memory once compiled; the compiled programs are deleted when the room closes, expires, or the server stops. Peers see the same class results you do.";
+  }
+  $("#h-bp-run").onclick = async () => {
+    $("#h-bp-run").disabled = true;
+    const res = await jsonPost(api + "/run", {}, H);
+    if (!res.ok){ const j = await res.json().catch(() => ({})); $("#h-bp-msg").textContent = j.error || "Could not start."; }
+    refresh();
+  };
 
   let lastSummary = null, linkExpires = 0;
   async function refreshReportLink(force){

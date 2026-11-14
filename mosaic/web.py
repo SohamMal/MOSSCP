@@ -16,6 +16,10 @@ Reports show the shape of each file with the matching regions marked, and
 identifier names are withheld -- from the admin as much as from anyone.
 Privacy is chosen when the room is created and cannot be changed later.
 
+Predictor rooms (bpeval.py) collect one mine.cpp per peer, build it against
+the bpsim simulator, run it on the server's traces and publish only the
+cohort's average and median MPKI. No individual result is kept or shown.
+
 Standard library only.
 """
 
@@ -43,6 +47,7 @@ from email.parser import BytesParser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
+from . import bpeval
 from . import report as report_mod
 from .engine import Config, is_source_path, run_sources
 from .tokens import EXT_MAP, LANGS
@@ -57,6 +62,7 @@ MAX_ARCHIVE_ENTRIES = 20_000
 CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"  # no 0/O, 1/I/L
 CODE_LEN = 8
 DURATIONS = (1, 2, 4, 8, 12, 24, 48, 72)
+KINDS = ("similarity", "predictor")
 
 
 class Limits:
@@ -239,10 +245,20 @@ class Upload:
         self.created = time.time()
         self.updated = self.created
         self.secret_hash = _hash(secret) if secret else None
+        # predictor rooms: build state, visible to the submitter only
+        self.bp_status = ""  # queued | building | ready | failed
+        self.bp_messages: list[str] = []
+        self.bp_bits: int | None = None
+        self.binary: bytes | None = None
+        self.bp_gen = 0  # bumps on replace, so a stale build is discarded
 
     @property
     def size(self) -> int:
-        return sum(len(d) for d in self.files.values())
+        return sum(len(d) for d in self.files.values()) + len(self.binary or b"")
+
+    def build_status(self) -> dict:
+        """For the submitter's own receipt only. Holds no MPKI."""
+        return {"status": self.bp_status, "messages": list(self.bp_messages), "bits": self.bp_bits}
 
     def public(self) -> dict:
         return {
@@ -258,10 +274,12 @@ class Upload:
 
 
 class Room:
-    def __init__(self, code: str, name: str, private: bool, ttl_seconds: float, limits: Limits) -> None:
+    def __init__(self, code: str, name: str, private: bool, ttl_seconds: float, limits: Limits,
+                 kind: str = "similarity") -> None:
         self.code = code
         self.name = name
-        self._private = bool(private)
+        self.kind = kind if kind in KINDS else "similarity"
+        self._private = bool(private) or self.kind == "predictor"
         self.instructions = ""
         self.admin_token = secrets.token_urlsafe(24)
         self.created = time.time()
@@ -307,6 +325,7 @@ class Room:
             self.discarded += len(self.uploads)
             for u in self.uploads.values():
                 u.files.clear()
+                u.binary = None
             self.uploads.clear()
             self.skeleton.clear()
             self.report_html = None
@@ -330,13 +349,47 @@ class Room:
             exp = self.report_links.get(token)
             return exp is not None and exp >= time.time() and self.report_html is not None
 
-    def host_state(self, join_links: list[str]) -> dict:
+    def build_counts(self) -> dict:
+        counts = {"queued": 0, "building": 0, "ready": 0, "failed": 0}
+        for u in self.uploads.values():
+            if u.bp_status in counts:
+                counts[u.bp_status] += 1
+        return counts
+
+    def public_analysis(self) -> dict:
+        a = dict(self.analysis)
+        a.pop("trace", None)
+        if a.get("status") == "done":
+            a["stale"] = a.get("version") != self.version
+        return a
+
+    def host_state(self, join_links: list[str], traces: list[str] | None = None) -> dict:
         with self.lock:
-            a = dict(self.analysis)
-            a.pop("trace", None)
-            if a.get("status") == "done":
-                a["stale"] = a.get("version") != self.version
+            a = self.public_analysis()
+            if self.kind == "predictor":
+                # Names and arrival times only: no sizes, files or build status
+                # per person, and never a per-person result.
+                return {
+                    "kind": self.kind,
+                    "code": display_code(self.code),
+                    "name": self.name,
+                    "private": True,
+                    "instructions": self.instructions,
+                    "accepting": self.accepting,
+                    "created": self.created,
+                    "expires": self.expires,
+                    "now": time.time(),
+                    "join_links": join_links,
+                    "uploads": sorted(
+                        ({"id": u.id, "label": u.label, "updated": u.updated} for u in self.uploads.values()),
+                        key=lambda x: x["label"].lower(),
+                    ),
+                    "builds": self.build_counts(),
+                    "traces": traces or [],
+                    "analysis": a,
+                }
             return {
+                "kind": self.kind,
                 "code": display_code(self.code),
                 "name": self.name,
                 "private": self.private,
@@ -357,7 +410,28 @@ class Room:
             }
 
     def peer_info(self) -> dict:
+        if self.kind == "predictor":
+            with self.lock:
+                a = self.public_analysis()
+                results = None
+                if a.get("status") == "done":
+                    results = {k: a[k] for k in ("summary", "finished", "stale") if k in a}
+                return {
+                    "kind": self.kind,
+                    "code": display_code(self.code),
+                    "name": self.name,
+                    "private": True,
+                    "instructions": self.instructions,
+                    "accepting": self.accepting and not self.ended,
+                    "expires": self.expires,
+                    "now": time.time(),
+                    "limits": {"peer_bytes": bpeval.MAX_SOURCE_BYTES, "peer_files": 1},
+                    "extensions": [".cpp"],
+                    "submissions": len(self.uploads),
+                    "results": results,
+                }
         return {
+            "kind": self.kind,
             "code": display_code(self.code),
             "name": self.name,
             "private": self.private,
@@ -373,9 +447,11 @@ class Room:
 class Hub:
     """All rooms on this server."""
 
-    def __init__(self, limits: Limits, create_key: str | None = None) -> None:
+    def __init__(self, limits: Limits, create_key: str | None = None,
+                 harness: "bpeval.Harness | None" = None) -> None:
         self.limits = limits
         self.create_key = create_key or None
+        self.harness = harness
         self.rooms: dict[str, Room] = {}
         self.lock = threading.RLock()
         self.closed_rooms = 0
@@ -387,12 +463,21 @@ class Hub:
             if code not in self.rooms:
                 return code
 
-    def create(self, name: str, private: bool, hours: float) -> Room:
+    def predictor_problem(self) -> str | None:
+        if self.harness is None:
+            return "predictor rooms are turned off on this server"
+        return self.harness.problem()
+
+    def create(self, name: str, private: bool, hours: float, kind: str = "similarity") -> Room:
+        if kind == "predictor":
+            why = self.predictor_problem()
+            if why:
+                raise LimitError(f"this server cannot run predictor rooms: {why}")
         with self.lock:
             if len(self.rooms) >= self.limits.max_rooms:
                 raise LimitError("this server has reached its room limit; try again later")
             hours = max(0.25, min(float(hours), self.limits.max_room_hours))
-            room = Room(self._new_code(), name, private, hours * 3600, self.limits)
+            room = Room(self._new_code(), name, private, hours * 3600, self.limits, kind)
             self.rooms[room.code] = room
             return room
 
@@ -565,6 +650,102 @@ def start_analysis(room: Room, opts: dict) -> str | None:
             del snapshot[:]
 
     threading.Thread(target=work, daemon=True, name=f"mosaic-check-{room.code}").start()
+    return None
+
+
+# --- predictor rooms -----------------------------------------------------
+
+
+def pick_predictor_source(files: list[tuple[str, bytes]]) -> tuple[bytes | None, str | None]:
+    """The one mine.cpp in an upload, or an error for the submitter."""
+    named = [d for rel, d in files if rel.rsplit("/", 1)[-1].lower() == bpeval.SOURCE_NAME]
+    cpps = [d for rel, d in files if rel.lower().endswith(".cpp")]
+    if len(named) == 1:
+        src = named[0]
+    elif not named and len(cpps) == 1:
+        src = cpps[0]
+    elif len(named) > 1:
+        return None, f"the upload has more than one {bpeval.SOURCE_NAME}; send just yours"
+    else:
+        return None, f"upload your {bpeval.SOURCE_NAME} (only that one file is used)"
+    if not src.strip():
+        return None, f"{bpeval.SOURCE_NAME} is empty"
+    if len(src) > bpeval.MAX_SOURCE_BYTES:
+        return None, f"{bpeval.SOURCE_NAME} is larger than {bpeval.MAX_SOURCE_BYTES // 1024} KB"
+    return src, None
+
+
+def queue_build(hub: Hub, room: Room, up: Upload, source: bytes) -> None:
+    """Compile in the background. The source is dropped once the build ends."""
+    gen = up.bp_gen
+    up.bp_status, up.bp_messages, up.bp_bits, up.binary = "queued", [], None, None
+    up.files.clear()
+    box = [source]
+
+    def job() -> None:
+        try:
+            with room.lock:
+                if room.ended or up.bp_gen != gen or room.uploads.get(up.id) is not up:
+                    return
+                up.bp_status = "building"
+            try:
+                res = hub.harness.build(box[0])
+            except Exception as exc:
+                res = bpeval.BuildResult(False, [f"the server could not build it ({exc.__class__.__name__})"])
+            with room.lock:
+                if room.ended or up.bp_gen != gen or room.uploads.get(up.id) is not up:
+                    return
+                up.bp_status = "ready" if res.ok else "failed"
+                up.bp_messages = res.messages
+                up.bp_bits = res.bits
+                up.binary = res.binary
+                room.touch()
+        finally:
+            box.clear()
+
+    hub.harness.submit_build(job)
+
+
+def start_bp_eval(hub: Hub, room: Room) -> str | None:
+    """Run every built submission on the traces; keep only the aggregates."""
+    harness = hub.harness
+    if harness is None or harness.problem():
+        return "this server cannot run predictors"
+    with room.lock:
+        if room.analysis.get("status") == "running":
+            return "an evaluation is already running"
+        binaries = [u.binary for u in room.uploads.values() if u.bp_status == "ready" and u.binary]
+        if not binaries:
+            return "no submission has built successfully yet"
+        counts = room.build_counts()
+        version = room.version
+        room.analysis = {"status": "running", "phase": "run", "done": 0, "total": len(binaries),
+                         "started": time.time()}
+
+    def progress(i: int, n: int) -> None:
+        with room.lock:
+            if room.analysis.get("status") == "running":
+                room.analysis.update(done=i, total=n)
+
+    def work() -> None:
+        try:
+            summary = bpeval.evaluate(harness, binaries, progress=progress, cancelled=lambda: room.ended)
+            summary["not_built"] = counts["failed"]
+            summary["still_building"] = counts["queued"] + counts["building"]
+            with room.lock:
+                if room.ended:
+                    return
+                room.analysis = {"status": "done", "summary": summary, "version": version,
+                                 "finished": time.time()}
+        except Exception as exc:
+            with room.lock:
+                if not room.ended:
+                    # No traceback: it could carry values from the run.
+                    room.analysis = {"status": "error", "error": exc.__class__.__name__}
+        finally:
+            del binaries[:]
+
+    threading.Thread(target=work, daemon=True, name=f"mosaic-bp-{room.code}").start()
     return None
 
 
@@ -822,6 +1003,10 @@ class Handler(BaseHTTPRequestHandler):
                     "create_key_required": bool(self.hub.create_key),
                     "durations": [d for d in DURATIONS if d <= self.hub.limits.max_room_hours],
                     "local_only": self.server.local_only,
+                    "predictor": {
+                        "available": self.hub.predictor_problem() is None,
+                        "problem": self.hub.predictor_problem(),
+                    },
                 }
             )
 
@@ -847,6 +1032,18 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(room.peer_info())
             return
 
+        m = re.match(r"^/api/rooms/([A-Za-z0-9-]+)/submit/([0-9a-f]{12})$", path)
+        if m:
+            room = self._room(m.group(1))
+            if room is None:
+                return
+            secret = self.headers.get("X-Mosaic-Receipt") or ""
+            with room.lock:
+                u = room.uploads.get(m.group(2))
+                if u is None or not u.secret_hash or not hmac.compare_digest(u.secret_hash, _hash(secret)):
+                    return self._error(404, "no such submission")
+                return self._json(u.build_status())
+
         m = re.match(r"^/api/rooms/([A-Za-z0-9-]+)/admin/(state|report\.html|report\.json)$", path)
         if m:
             room = self._admin(m.group(1))
@@ -854,7 +1051,8 @@ class Handler(BaseHTTPRequestHandler):
                 return
             what = m.group(2)
             if what == "state":
-                return self._json(room.host_state(self.server.join_links(room)))
+                traces = self.hub.harness.trace_names() if (room.kind == "predictor" and self.hub.harness) else None
+                return self._json(room.host_state(self.server.join_links(room), traces))
             with room.lock:
                 data = room.report_html if what.endswith("html") else room.report_json
             if data is None:
@@ -885,6 +1083,8 @@ class Handler(BaseHTTPRequestHandler):
                 return
             action = m.group(2)
             if action == "upload":
+                if room.kind == "predictor":
+                    return self._error(403, "in predictor rooms only peers upload their own code")
                 return self._host_upload(room)
             data = self._json_body()
             if data is None:
@@ -900,6 +1100,9 @@ class Handler(BaseHTTPRequestHandler):
                         room.accepting = bool(data["accepting"])
                 return self._json({"ok": True, "private": room.private})
             if action == "run":
+                if room.kind == "predictor":
+                    err = start_bp_eval(self.hub, room)
+                    return self._error(409, err) if err else self._json({"started": True}, 202)
                 err = start_analysis(room, data)
                 return self._error(409, err) if err else self._json({"started": True}, 202)
             if action == "report-link":
@@ -927,6 +1130,8 @@ class Handler(BaseHTTPRequestHandler):
                 if u is None or not u.secret_hash or not hmac.compare_digest(u.secret_hash, _hash(secret)):
                     return self._error(404, "no such submission")
                 u.files.clear()
+                u.binary = None
+                u.bp_gen += 1
                 del room.uploads[u.id]
                 room.touch()
             return self._json({"withdrawn": True})
@@ -942,6 +1147,8 @@ class Handler(BaseHTTPRequestHandler):
                     if u is None:
                         return self._error(404, "no such submission")
                     u.files.clear()
+                    u.binary = None
+                    u.bp_gen += 1
                 else:
                     room.skeleton.clear()
                 room.touch()
@@ -962,7 +1169,10 @@ class Handler(BaseHTTPRequestHandler):
         name = str(data.get("name", "")).strip()[:120]
         if not name:
             return self._error(400, "give the room a name")
-        privacy = data.get("privacy")
+        kind = data.get("kind") or "similarity"
+        if kind not in KINDS:
+            return self._error(400, "unknown room type")
+        privacy = "private" if kind == "predictor" else data.get("privacy")
         if privacy not in ("private", "open"):
             return self._error(400, "choose whether code is visible in the report")
         try:
@@ -970,11 +1180,12 @@ class Handler(BaseHTTPRequestHandler):
         except (TypeError, ValueError):
             return self._error(400, "bad duration")
         try:
-            room = self.hub.create(name, privacy == "private", hours)
+            room = self.hub.create(name, privacy == "private", hours, kind)
         except LimitError as exc:
             return self._error(503, str(exc))
         return self._json(
             {
+                "kind": room.kind,
                 "code": display_code(room.code),
                 "admin_token": room.admin_token,
                 "admin_path": f"/room/{display_code(room.code)}",
@@ -1004,6 +1215,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(413, str(exc))
         except (ValueError, KeyError):
             return self._error(400, "could not read the upload")
+        if room.kind == "predictor":
+            return self._predictor_submit(room, meta, files, warnings)
         files = strip_wrapper(files)
         if not files:
             return self._error(400, "no source files found in the upload (supported: "
@@ -1050,6 +1263,53 @@ class Handler(BaseHTTPRequestHandler):
                 "at": up.updated,
                 "replaced": existing is not None,
                 "warnings": warnings,
+            }
+        return self._json(result, 201)
+
+    def _predictor_submit(self, room: Room, meta: dict, files: list[tuple[str, bytes]], warnings: list[str]):
+        source, err = pick_predictor_source(files)
+        del files
+        if err:
+            return self._error(400, err)
+        label = clean_label(str(meta.get("name", "")))
+        if not label:
+            return self._error(400, "please enter your name or roll number")
+        replace_id = str(meta.get("replace_id") or "")
+        receipt = str(meta.get("receipt") or "")
+        with room.lock:
+            if room.ended:
+                return self._error(410, "this room has been closed")
+            existing = room.uploads.get(replace_id) if replace_id else None
+            if existing is not None and not (
+                existing.secret_hash and hmac.compare_digest(existing.secret_hash, _hash(receipt))
+            ):
+                existing = None
+            err = self.hub.check_space(room, len(source), existing.size if existing else 0)
+            if err:
+                return self._error(507, err)
+            if existing is None and len(room.uploads) >= room.limits.max_uploads:
+                return self._error(507, "this room is full; ask the host")
+            if existing is not None:
+                existing.bp_gen += 1
+                existing.label = room.unique_label(label, exclude=existing.id)
+                existing.updated = time.time()
+                up, secret = existing, receipt
+            else:
+                secret = secrets.token_urlsafe(16)
+                up = Upload(room.unique_label(label), "peer", [], secret)
+                room.uploads[up.id] = up
+            queue_build(self.hub, room, up, source)
+            room.touch()
+            result = {
+                "id": up.id,
+                "receipt": secret,
+                "label": up.label,
+                "files": [bpeval.SOURCE_NAME],
+                "bytes": len(source),
+                "at": up.updated,
+                "replaced": existing is not None,
+                "warnings": warnings,
+                "build": up.build_status(),
             }
         return self._json(result, 201)
 
@@ -1123,8 +1383,9 @@ def create_server(
     create_key: str | None = None,
     public_url: str | None = None,
     behind_proxy: bool = False,
+    harness: "bpeval.Harness | None" = None,
 ) -> RoomServer:
-    hub = Hub(limits or Limits(), create_key)
+    hub = Hub(limits or Limits(), create_key, harness)
     return RoomServer((host, port), hub, public_url=public_url, behind_proxy=behind_proxy)
 
 
@@ -1208,6 +1469,13 @@ def main(argv: list[str] | None = None) -> int:
                    default=env.get("MOSAIC_KEEP_AWAKE", "1" if on_render else "0") == "1",
                    help="while rooms are open, ping the public URL every 10 minutes so a free "
                         "host does not put the server to sleep (on by default on Render)")
+    p.add_argument("--bp-harness", default=env.get("MOSAIC_BP_HARNESS", bpeval.DEFAULT_HARNESS),
+                   help="the bpsim simulator folder (src/, tools/check_rules.py) for predictor rooms")
+    p.add_argument("--bp-traces", default=env.get("MOSAIC_BP_TRACES"),
+                   help="folder of traces predictor rooms run on (default: <bp-harness>/traces)")
+    p.add_argument("--bp-run-seconds", type=int, default=_env_int("MOSAIC_BP_RUN_SECONDS", 600),
+                   help="time limit for one submission on all traces")
+    p.add_argument("--no-predictor-rooms", action="store_true", help="turn predictor rooms off")
     p.add_argument("--open", action="store_true", help="open the create-room page in your browser")
     args = p.parse_args(argv)
 
@@ -1218,9 +1486,12 @@ def main(argv: list[str] | None = None) -> int:
         max_rooms=args.max_rooms,
         max_room_hours=args.max_room_hours,
     )
+    harness = None
+    if not args.no_predictor_rooms:
+        harness = bpeval.Harness(args.bp_harness, args.bp_traces, run_seconds=args.bp_run_seconds)
     try:
         srv = create_server(args.host, args.port, limits=limits, create_key=args.create_key,
-                            public_url=args.public_url, behind_proxy=args.behind_proxy)
+                            public_url=args.public_url, behind_proxy=args.behind_proxy, harness=harness)
     except OSError as exc:
         print(f"mosaic: cannot listen on {args.host}:{args.port}: {exc}")
         return 1
@@ -1242,6 +1513,15 @@ def main(argv: list[str] | None = None) -> int:
     print()
     print("  Closing a room deletes its files. Ctrl+C stops the server and deletes every room.")
     print()
+    if harness is not None:
+        why = harness.problem()
+        if why:
+            print(f"  Predictor rooms are off: {why}.")
+        else:
+            bpeval.make_undumpable()
+            print(f"  Predictor rooms are on: {len(harness.traces)} trace(s) in {harness.traces_dir}"
+                  f"{'' if harness.network_isolated else ' (runs are not network-isolated on this host)'}.")
+        print()
 
     threading.Thread(target=watch_expiry, args=(srv,), daemon=True).start()
     if args.keep_awake:
@@ -1262,9 +1542,11 @@ def main(argv: list[str] | None = None) -> int:
         srv.stopping.set()
         n = srv.hub.close_all()
         srv.server_close()
+        if harness is not None:
+            harness.shutdown()
     total = srv.hub.discarded
     print(f"  server stopped -- {srv.hub.closed_rooms} room(s) closed, {total} submission(s) deleted"
-          f"{'' if n == total else f' ({n} at shutdown)'}; nothing was written to disk.")
+          f"{'' if n == total else f' ({n} at shutdown)'}; nothing was kept on disk.")
     return 0
 
 

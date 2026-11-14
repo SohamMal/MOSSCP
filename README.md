@@ -79,9 +79,44 @@ This is chosen when the room is created and **cannot be changed afterwards**. Pe
 
 In hidden mode the code is not just blurred with CSS. **No source text is ever sent to a browser**, the admin's included. The report, the JSON export and the dashboard are built without it, and a test checks every identifier from the submissions against all of them. File names are still shown.
 
+### Predictor rooms: class MPKI, no individual results
+
+For the branch-predictor assignment (`bpsim/`), choose **Predictor MPKI** when creating a room. Peers upload their `mine.cpp`; the server builds it against the simulator, runs it on the traces, and publishes only the **class average and median MPKI** (plus the same two numbers for each trace).
+
+| Who | Sees |
+|---|---|
+| Everyone in the room (admin and peers) | how many submissions were evaluated, failed to run, or did not build; average and median MPKI; per-trace average and median |
+| The admin | the names of those who submitted and when; counts of builds ready / in progress / not accepted |
+| Each submitter, about their own upload only | whether it built, and if not, why (rule violations from `tools/check_rules.py`, compiler errors, storage over budget); the storage it uses |
+| Nobody | anyone's code, or anyone's MPKI, including their own |
+
+How that is enforced:
+
+- **The source is dropped once compiled.** Only the compiled program stays in memory, and nobody can download it. The admin cannot upload code into these rooms.
+- **No individual result is ever stored.** The evaluator is handed the programs without names, in random order. Each program's MPKIs are added to running lists inside one function, reduced to averages and medians, and the lists are cleared. Failures are only counted. A test checks that no non-median individual value appears in any page or API response, or in the room's state.
+- **Program output is never shown.** Submitters see only messages the server writes itself, plus compiler errors about their own file. Includes are checked before compiling, so an `#include` of any file outside the simulator and the standard library (a trace, for example) is refused.
+- **Builds and runs are sandboxed**, one at a time across the server, in a private temporary folder that is deleted as soon as the job ends. Each job has CPU-time, memory and output-size limits, a minimal environment, and no network where the OS allows unprivileged namespaces (`mosaic serve` says which). A predictor that hangs is killed after `--bp-run-seconds` and counted as failed. The server marks itself non-dumpable, so a submitted program cannot read the server's memory through `/proc`.
+
+Each submission's MPKI is the mean over the traces (what `bpsim` prints as "average MPKI"); the room reports the average and median of those across submissions.
+
+Things to know:
+
+- **Small groups reveal individuals.** With one evaluated submission, the average *is* that person's MPKI; with two, each person can work out the other's from their own. With an odd number of submissions, the median is one person's actual score, though not whose. Comparing results before and after one person withdraws reveals that person's score. Evaluate once, after closing submissions, with a reasonable number of people.
+- **Traces.** By default rooms run on `bpsim/traces/`. Use `--bp-traces DIR` (`MOSAIC_BP_TRACES`) for others, such as hidden grading traces. Anything in a public repository is public; keep hidden traces out of it and mount them on the server instead.
+- **The rules checker and the include check are strong but not proof.** A determined student could still find C++ that reaches around them, for example to read the trace files while running. They would have no way to see the result, except through the network on hosts without namespace isolation.
+
+| Predictor options | Default | |
+|---|---|---|
+| `--bp-harness` | `bpsim/` | simulator folder with `src/` and `tools/check_rules.py` (`MOSAIC_BP_HARNESS`) |
+| `--bp-traces` | `<harness>/traces` | traces to run on (`MOSAIC_BP_TRACES`) |
+| `--bp-run-seconds` | 600 | time limit for one submission on all traces (`MOSAIC_BP_RUN_SECONDS`) |
+| `--no-predictor-rooms` | | turn predictor rooms off |
+
+The included traces take about a quarter of a second per submission on a laptop. On Render's free tier, allow roughly ten times that.
+
 ### Nothing is stored
 
-There is no database and no upload folder. Uploads, unpacked archives and reports exist only in the server's memory, and closing a room drops them. A test runs two complete rooms (upload, unpack, check, report, close) and fails if anything is opened for writing. In hidden mode the admin never receives the code. In visible mode, code only reaches the admin's disk if they click *Download report*.
+There is no database and no upload folder. Uploads, unpacked archives and reports exist only in the server's memory, and closing a room drops them. The one exception is predictor rooms: a compiler and a program need real files, so each build or run gets a private temporary folder that is deleted the moment it finishes, and only one exists at a time. A test runs two complete rooms (upload, unpack, check, report, close) and fails if anything is opened for writing. In hidden mode the admin never receives the code. In visible mode, code only reaches the admin's disk if they click *Download report*.
 
 A database would mean the files *are* stored somewhere, which is why there isn't one. The central piece is the memory-only server itself.
 
