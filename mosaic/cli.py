@@ -49,7 +49,7 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--max-gap", type=int, default=48,
                    help="token gap tolerated inside one matched passage")
     g.add_argument("-t", "--threshold", type=float, default=0.25,
-                   help="report pairs at or above this fused score")
+                   help="report pairs whose mosaic or MOSS score reaches this")
     g.add_argument("--cluster-threshold", type=float, default=0.45,
                    help="edge score for transitive grouping")
     g.add_argument("--max-df", type=float, default=0.30,
@@ -59,6 +59,8 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--detail", type=int, default=60, help="pairs to expand with side-by-side code")
     g.add_argument("--max-lines", type=int, default=400, help="code lines per pane")
     g.add_argument("--top", type=int, default=20, help="pairs to print to the terminal")
+    g.add_argument("--rank-by", choices=("mosaic", "moss"), default="mosaic",
+                   help="order pairs by the mosaic score or by the MOSS score")
     g.add_argument("--title", default="Similarity report")
     g.add_argument("-q", "--quiet", action="store_true")
     return p
@@ -118,20 +120,22 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     report_mod.write_html(
-        rep, args.out, detail=args.detail, max_lines=args.max_lines, title=args.title
+        rep, args.out, detail=args.detail, max_lines=args.max_lines, title=args.title,
+        rank_by=args.rank_by,
     )
     if args.json_out:
         with open(args.json_out, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(report_mod.build_json(rep))
 
     if not args.quiet:
-        _print_summary(rep, args.top, elapsed, args.out, args.json_out)
+        _print_summary(rep, args.top, elapsed, args.out, args.json_out, args.rank_by)
     if args.open:
         webbrowser.open("file://" + os.path.abspath(args.out))
     return 0
 
 
-def _print_summary(rep, top: int, elapsed: float, out: str, json_out: str | None) -> None:
+def _print_summary(rep, top: int, elapsed: float, out: str, json_out: str | None,
+                   rank_by: str = "mosaic") -> None:
     n_sub = len({d.submission for d in rep.docs})
     print()
     print(f"  {len(rep.docs)} files, {n_sub} submissions, "
@@ -145,11 +149,13 @@ def _print_summary(rep, top: int, elapsed: float, out: str, json_out: str | None
     if not rep.pairs:
         print("  nothing above threshold")
     else:
-        print(f"  {'score':>6} {'z':>5} {'tok':>5} {'str':>5}  pair")
+        ranked = sorted(rep.pairs, key=lambda p: -p.moss) if rank_by == "moss" else rep.pairs
+        print(f"  ranked by {'MOSS' if rank_by == 'moss' else 'mosaic'} score")
+        print(f"  {'mosaic':>6} {'moss':>5} {'z':>5} {'str':>5}  pair")
         print(f"  {'-'*6} {'-'*5} {'-'*5} {'-'*5}  {'-'*48}")
-        for p in rep.pairs[:top]:
+        for p in ranked[:top]:
             z = f"{p.z:5.1f}" if p.z else "    -"
-            print(f"  {p.score*100:5.0f}% {z} {p.fp*100:4.0f}% {p.ast*100:4.0f}%  "
+            print(f"  {p.score*100:5.0f}% {p.moss*100:4.0f}% {z} {p.ast*100:4.0f}%  "
                   f"{p.a.rel} <-> {p.b.rel}")
             if p.reasons:
                 print(f"         {'; '.join(p.reasons[:2])}")

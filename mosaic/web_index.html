@@ -86,6 +86,12 @@ td.name{max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsi
 .tile b{display:block;font-size:1.3rem;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
 .tile span{font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
 .score{font-weight:650;font-variant-numeric:tabular-nums}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.seg button{border:0;border-radius:0;padding:5px 12px}
+.seg button+button{border-left:1px solid var(--line)}
+.seg button[aria-pressed="true"]{background:var(--ink);color:var(--panel)}
+.seg button[aria-pressed="true"]:hover{background:var(--ink)}
+th.sorted{color:var(--ink)}
 .s-hot{color:var(--hot)} .s-warn{color:var(--warn)} .s-low{color:var(--muted)}
 .meter{display:inline-block;width:56px;height:6px;background:var(--line);border-radius:3px;vertical-align:middle;margin-left:6px;overflow:hidden}
 .meter>i{display:block;height:100%;background:currentColor}
@@ -362,6 +368,13 @@ details>summary{cursor:pointer;color:var(--muted);font-size:.86rem}
       </div>
       <p class="muted small" style="margin:0" id="h-results-note"></p>
       <div id="h-clusters"></div>
+      <div class="row small" id="h-rank" hidden><span class="muted">Rank by</span>
+        <span class="seg" role="group" aria-label="Rank pairs by">
+          <button type="button" data-rank="mosaic" aria-pressed="true">mosaic score</button>
+          <button type="button" data-rank="moss" aria-pressed="false">MOSS score</button>
+        </span>
+        <span class="muted">mosaic combines five signals. MOSS is token-fingerprint overlap alone, the number MOSS itself reports (each file's share in brackets).</span>
+      </div>
       <div class="tablewrap" id="h-pairs"></div>
     </section>
 
@@ -781,6 +794,31 @@ function hostView(code){
     if ($("#h-open").getAttribute("href") === "#"){ e.preventDefault(); refreshReportLink(true); }
     else if (Date.now() >= linkExpires) setTimeout(() => refreshReportLink(true), 0);
   });
+  let rankBy = "mosaic";
+  try { rankBy = localStorage.getItem("mosaic-rank") === "moss" ? "moss" : "mosaic"; } catch (e) {}
+  document.querySelectorAll("#h-rank [data-rank]").forEach(b => b.addEventListener("click", () => {
+    rankBy = b.dataset.rank;
+    try { localStorage.setItem("mosaic-rank", rankBy); } catch (e) {}
+    if (lastSummary) renderPairs(lastSummary);
+  }));
+  const sev = v => v >= .6 ? "s-hot" : v >= .4 ? "s-warn" : "s-low";
+  function renderPairs(sm){
+    document.querySelectorAll("#h-rank [data-rank]").forEach(b => b.setAttribute("aria-pressed", b.dataset.rank === rankBy));
+    $("#h-rank").hidden = !sm.top.length;
+    const other = rankBy === "moss" ? "score" : "moss", key = rankBy === "moss" ? "moss" : "score";
+    const rows = sm.top.slice().sort((x, y) => (y[key] - x[key]) || (y[other] - x[other])).slice(0, 30);
+    const th = (col, label) => `<th class="num${rankBy === col ? " sorted" : ""}">${label}</th>`;
+    $("#h-pairs").innerHTML = !rows.length ? '<div class="empty">No pairs above the threshold.</div>'
+      : `<table><thead><tr><th class="num">#</th>${th("mosaic", "mosaic score")}${th("moss", "MOSS score")}<th>Pair</th><th class="num">Structure</th><th class="num">z</th></tr></thead><tbody>${
+        rows.map((p, i) => {
+          const moss = p.moss ?? p.fp;
+          return `<tr><td class="num muted">${i + 1}</td>
+            <td class="score ${sev(p.score)}" style="white-space:nowrap">${pct(p.score)}<span class="meter"><i style="width:${pct(p.score)}"></i></span></td>
+            <td class="score ${sev(moss)}" style="white-space:nowrap">${pct(moss)}<span class="meter"><i style="width:${pct(moss)}"></i></span>${p.moss_a != null ? `<div class="muted small" style="font-weight:400">${pct(p.moss_a)} / ${pct(p.moss_b)}</div>` : ""}</td>
+            <td><b>${esc(p.sa)}</b> &harr; <b>${esc(p.sb)}</b><div class="reasons">${esc((p.reasons || []).slice(0, 2).join(" · "))}</div></td>
+            <td class="num">${pct(p.ast)}</td><td class="num">${p.z ? p.z.toFixed(1) : "–"}</td></tr>`;
+        }).join("")}</tbody></table>`;
+  }
   function renderResults(sm){
     refreshReportLink(false);
     if (JSON.stringify(sm) === JSON.stringify(lastSummary)) return;
@@ -788,16 +826,9 @@ function hostView(code){
     refreshReportLink(true);
     $("#h-tiles").innerHTML = [
       [sm.submissions, "submissions"], [sm.files, "files"], [sm.pairs_examined.toLocaleString(), "pairs examined"],
-      [sm.above_threshold, "above threshold"], [sm.flagged, "score ≥ 50%"], [sm.clusters.length, "clusters"],
+      [sm.above_threshold, "above threshold"], [sm.flagged, "mosaic ≥ 50%"], [sm.flagged_moss ?? 0, "MOSS ≥ 50%"], [sm.clusters.length, "clusters"],
     ].map(([n, l]) => `<div class="tile"><b>${n}</b><span>${l}</span></div>`).join("");
-    $("#h-pairs").innerHTML = !sm.top.length ? '<div class="empty">No pairs above the threshold.</div>'
-      : `<table><thead><tr><th>Score</th><th>Pair</th><th class="num">Tokens</th><th class="num">Structure</th><th class="num">z</th></tr></thead><tbody>${
-        sm.top.map(p => {
-          const cls = p.score >= .6 ? "s-hot" : p.score >= .4 ? "s-warn" : "s-low";
-          return `<tr><td class="score ${cls}" style="white-space:nowrap">${pct(p.score)}<span class="meter"><i style="width:${pct(p.score)}"></i></span></td>
-            <td><b>${esc(p.sa)}</b> &harr; <b>${esc(p.sb)}</b><div class="reasons">${esc((p.reasons || []).slice(0, 2).join(" · "))}</div></td>
-            <td class="num">${pct(p.fp)}</td><td class="num">${pct(p.ast)}</td><td class="num">${p.z ? p.z.toFixed(1) : "–"}</td></tr>`;
-        }).join("")}</tbody></table>`;
+    renderPairs(sm);
     $("#h-clusters").innerHTML = sm.clusters.length
       ? sm.clusters.map(c => `<div class="notice warn" style="margin-bottom:6px"><b>${c.members.length} submissions</b> (mean ${pct(c.mean)}): ${c.members.map(esc).join(", ")}</div>`).join("") : "";
   }

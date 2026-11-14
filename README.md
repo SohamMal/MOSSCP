@@ -14,6 +14,8 @@ mosaic keeps MOSS's algorithm as one signal among five. It also judges every sco
 | **Compression distance (NCD)** | heavy but shallow obfuscation |
 | **Construct profile** | weak supporting evidence only |
 
+**Two scores, side by side.** Every pair shows its **mosaic score** (all five signals combined) and its **MOSS score** (winnowing-fingerprint overlap alone: the share of each file covered by shared passages, the number MOSS itself reports, with provided code excluded). The room dashboard and the report have a **Rank by: mosaic score / MOSS score** toggle; in the terminal use `--rank-by moss`. A pair is listed when either score reaches the threshold. A big gap between the two (high mosaic, low MOSS) is the signature of a rewritten copy.
+
 On top of the signals, at the cohort level:
 
 - **Automatic boilerplate suppression.** Material shared by more than 30% of submissions is treated as provided code. You don't need a base file (`--base` still works).
@@ -39,7 +41,8 @@ python -m mosaic submissions/ --base skeleton/ --lang cpp --json results.json --
 
 | Option | Default | |
 |---|---|---|
-| `-t, --threshold` | 0.25 | report pairs at or above this fused score |
+| `-t, --threshold` | 0.25 | report pairs whose mosaic or MOSS score reaches this |
+| `--rank-by` | mosaic | order pairs by `mosaic` or `moss` score (the HTML report also has a toggle) |
 | `--base PATH` | | provided code to ignore (repeatable) |
 | `--max-df` | 0.30 | auto-suppress material shared by more than this share of submissions |
 | `-k`, `-w` | 14, 12 | k-gram length and winnowing window |

@@ -65,6 +65,14 @@ tr:last-child td{border-bottom:0}
 .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.85em}
 .score{font-weight:650;font-variant-numeric:tabular-nums}
 .sev-hot{color:var(--hot)} .sev-warn{color:var(--warn)} .sev-low{color:var(--muted)}
+.rankbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:18px 0 0}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.seg button{font:inherit;font-size:.85rem;border:0;background:var(--panel);color:var(--muted);padding:6px 12px;cursor:pointer}
+.seg button+button{border-left:1px solid var(--line)}
+.seg button[aria-pressed="true"]{background:var(--accent);color:#fff}
+.moss{font-variant-numeric:tabular-nums}
+.moss small{color:var(--muted);font-weight:400}
+th.sorted{color:var(--ink)}
 .bars{display:flex;gap:3px;align-items:flex-end;height:22px}
 .bar{width:9px;background:var(--line);border-radius:2px 2px 0 0;position:relative}
 .bar i{position:absolute;bottom:0;left:0;right:0;background:var(--accent);border-radius:2px 2px 0 0;display:block}
@@ -150,6 +158,35 @@ _JS = """
     });
     panel.querySelectorAll('.nofill span.b0,.nofill span.b1').forEach(function(){});
   });
+  function rank(by){
+    document.querySelectorAll('.rankable').forEach(function(box){
+      var items = Array.prototype.slice.call(box.querySelectorAll(':scope > [data-mosaic]'));
+      items.sort(function(x, y){
+        var a = parseFloat(y.dataset[by]) - parseFloat(x.dataset[by]);
+        if (a) return a;
+        var o = by === 'moss' ? 'mosaic' : 'moss';
+        return parseFloat(y.dataset[o]) - parseFloat(x.dataset[o]);
+      });
+      items.forEach(function(n){ box.appendChild(n); });
+    });
+    document.querySelectorAll('.seg [data-rank]').forEach(function(b){
+      b.setAttribute('aria-pressed', b.dataset.rank === by ? 'true' : 'false');
+    });
+    document.querySelectorAll('th[data-col]').forEach(function(th){
+      th.classList.toggle('sorted', th.dataset.col === by);
+    });
+    document.querySelectorAll('[data-rank-label]').forEach(function(n){
+      n.textContent = by === 'moss' ? 'MOSS score' : 'mosaic score';
+    });
+    try { localStorage.setItem('mosaic-rank', by); } catch (e) {}
+  }
+  document.addEventListener('click', function(e){
+    var b = e.target.closest('.seg [data-rank]');
+    if (b) rank(b.dataset.rank);
+  });
+  var start = document.body.dataset.rank || 'mosaic';
+  try { start = localStorage.getItem('mosaic-rank') || start; } catch (e) {}
+  if (start !== 'mosaic') rank(start);
 })();
 """
 
@@ -197,6 +234,16 @@ def sev_class(score: float) -> str:
 
 def _pct(x: float) -> str:
     return f"{round(100 * x)}%"
+
+
+def _moss(p: Pair) -> str:
+    """MOSS-style cell: the ranking value, with each file's share as MOSS shows it."""
+    return '<span class="moss score %s">%s</span> <small class="note">(%s / %s)</small>' % (
+        sev_class(p.moss), _pct(p.moss), _pct(p.fp_a), _pct(p.fp_b))
+
+
+def _rank_attrs(score: float, moss: float) -> str:
+    return 'data-mosaic="%.4f" data-moss="%.4f"' % (score, moss)
 
 
 def render_code(doc: Document, blk: dict[int, int], ast_lines: set[int], max_lines: int) -> str:
@@ -370,12 +417,14 @@ def _pair_detail(p: Pair, cfg_lines: int, redact: bool = False) -> str:
         for r in p.reasons
     )
     summary = (
-        '<summary><span class="score %s">%s</span>'
+        '<summary><span class="note">mosaic</span><span class="score %s">%s</span>'
+        '<span class="note">MOSS</span>%s'
         '<span class="mono">%s</span><span class="note">vs</span>'
         '<span class="mono">%s</span>%s<span style="margin-left:auto">%s</span></summary>'
         % (
             sev_class(p.score),
             _pct(p.score),
+            _moss(p),
             html.escape(p.a.rel),
             html.escape(p.b.rel),
             ('<span class="chip">z=%.1f</span>' % p.z) if p.z else "",
@@ -399,7 +448,7 @@ def _pair_detail(p: Pair, cfg_lines: int, redact: bool = False) -> str:
             _codebox(p.b, blk_b, ast_b, cfg_lines, redact),
         )
     )
-    return '<details class="pair">%s%s</details>' % (summary, body)
+    return '<details class="pair" %s>%s%s</details>' % (_rank_attrs(p.score, p.moss), summary, body)
 
 
 def _codebox(doc: Document, blk: dict[int, int], ast_lines: set[int], max_lines: int,
@@ -444,14 +493,17 @@ def _submission_table(rep: Report) -> str:
     rows = []
     for (a, b), ps in sorted(agg.items(), key=lambda kv: -max(p.score for p in kv[1])):
         best = max(ps, key=lambda p: p.score)
+        best_moss = max(ps, key=lambda p: p.moss)
         rows.append(
-            "<tr><td class='mono'>%s</td><td class='mono'>%s</td>"
-            "<td class='score %s'>%s</td><td>%s</td><td class='note'>%s</td></tr>"
+            "<tr %s><td class='mono'>%s</td><td class='mono'>%s</td>"
+            "<td class='score %s'>%s</td><td>%s</td><td>%s</td><td class='note'>%s</td></tr>"
             % (
+                _rank_attrs(best.score, best_moss.moss),
                 html.escape(a),
                 html.escape(b),
                 sev_class(best.score),
                 _pct(best.score),
+                _moss(best_moss),
                 _bars(best),
                 html.escape("%d file pair%s" % (len(ps), "" if len(ps) == 1 else "s")),
             )
@@ -460,7 +512,8 @@ def _submission_table(rep: Report) -> str:
         return '<p class="note">Nothing above threshold.</p>'
     return (
         "<div class='panel'><table><thead><tr><th>Submission</th><th>Submission</th>"
-        "<th>Top score</th><th>Signals</th><th></th></tr></thead><tbody>%s</tbody></table></div>"
+        "<th data-col='mosaic' class='sorted'>mosaic score</th><th data-col='moss'>MOSS score</th>"
+        "<th>Signals</th><th></th></tr></thead><tbody class='rankable'>%s</tbody></table></div>"
         % "".join(rows)
     )
 
@@ -472,6 +525,7 @@ def build_html(
     max_lines: int = 400,
     title: str = "Similarity report",
     redact: bool = False,
+    rank_by: str = "mosaic",
 ) -> str:
     """Render the report. With redact=True no source text is included at all:
     code panes show blurred line shapes with the matching regions marked."""
@@ -483,14 +537,28 @@ def build_html(
         (n_sub, "submissions"),
         (f"{rep.n_compared:,}", "pairs examined"),
         (len(rep.pairs), "above threshold"),
-        (len(flagged), "score &ge; 50%"),
+        (len(flagged), "mosaic &ge; 50%"),
+        (sum(1 for p in rep.pairs if p.moss >= 0.5), "MOSS &ge; 50%"),
         (len(rep.clusters), "clusters"),
     ]
     card_html = "".join(
         '<div class="card"><div class="n">%s</div><div class="l">%s</div></div>' % (n, l)
         for n, l in cards
     )
-    details = "".join(_pair_detail(p, max_lines, redact) for p in rep.pairs[:detail])
+    # Expand the top pairs by either score, so both rankings have evidence.
+    shown = rep.pairs[:detail]
+    seen = {id(p) for p in shown}
+    shown += [p for p in sorted(rep.pairs, key=lambda p: -p.moss)[:detail] if id(p) not in seen]
+    details = "".join(_pair_detail(p, max_lines, redact) for p in shown)
+    rank_by = "moss" if rank_by == "moss" else "mosaic"
+    rank_bar = (
+        '<div class="rankbar"><span class="note">Rank by</span><span class="seg">'
+        '<button type="button" data-rank="mosaic" aria-pressed="%s">mosaic score</button>'
+        '<button type="button" data-rank="moss" aria-pressed="%s">MOSS score</button></span>'
+        '<span class="note">mosaic combines five signals; MOSS is token-fingerprint overlap '
+        "alone (each file's share in brackets), the number MOSS itself reports.</span></div>"
+        % ("true" if rank_by == "mosaic" else "false", "true" if rank_by == "moss" else "false")
+    )
     private_note = (
         '<div class="private"><b>Private room.</b> Code is hidden from everyone, including the host. '
         "Each pane shows the shape of a file; coloured bars mark the passages that match "
@@ -500,8 +568,8 @@ def build_html(
     )
     more = (
         '<p class="note">%d further pairs are listed above the threshold but not expanded here '
-        "(raise --detail to include them).</p>" % (len(rep.pairs) - detail)
-        if len(rep.pairs) > detail
+        "(raise --detail to include them).</p>" % (len(rep.pairs) - len(shown))
+        if len(rep.pairs) > len(shown)
         else ""
     )
     suppressed = (
@@ -531,6 +599,7 @@ def build_html(
   {html.escape(suppressed)}.</p>
 </div>
 
+{rank_bar}
 <h2>Submission pairs</h2>
 {_submission_table(rep)}
 
@@ -540,12 +609,13 @@ def build_html(
 <h2>Evidence</h2>
 <p class="note">Left border: grey = shared token passage (MOSS-style), purple = identical
 normalized structure. Background colour pairs a passage with its counterpart.</p>
-{details}
+<div class="rankable">{details}</div>
 {more}
 
 <div class="footer">Generated by mosaic. Similarity is evidence, not a verdict &mdash;
 every flagged pair needs a human to read it.</div>
 </div>
+<script>document.body.dataset.rank = {json.dumps(rank_by)};</script>
 <script>{_JS}</script>
 """
 
@@ -578,6 +648,7 @@ def build_json(rep: Report, *, redact: bool = False) -> str:
                 "b": p.b.rel,
                 "submissions": [p.a.submission, p.b.submission],
                 "score": round(p.score, 4),
+                "moss_score": round(p.moss, 4),
                 "z": round(p.z, 2),
                 "signals": {
                     "fingerprint": {"a": round(p.fp_a, 4), "b": round(p.fp_b, 4)},

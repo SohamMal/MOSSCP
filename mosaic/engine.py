@@ -26,7 +26,7 @@ class Config:
     max_df: float = 0.30  # drop fingerprints seen in more than this share of docs
     min_tokens: int = 40  # ignore files smaller than this
     max_gap: int = 48  # token gap tolerated inside one matched passage
-    threshold: float = 0.25  # report pairs at or above this fused score
+    threshold: float = 0.25  # report pairs whose mosaic or MOSS score reaches this
     cluster_threshold: float = 0.45
     weights: dict[str, float] = field(
         default_factory=lambda: {"fp": 0.38, "ast": 0.34, "rename": 0.12, "ncd": 0.09, "prof": 0.07}
@@ -78,6 +78,13 @@ class Pair:
     @property
     def fp(self) -> float:
         return max(self.fp_a, self.fp_b)
+
+    @property
+    def moss(self) -> float:
+        """MOSS-style score: the share of a file covered by passages of shared
+        winnowed fingerprints (the larger of the two sides, as MOSS ranks).
+        Material shared across the cohort, or given with --base, is excluded."""
+        return self.fp
 
     @property
     def ast(self) -> float:
@@ -396,7 +403,7 @@ def cluster(pairs: list[Pair], threshold: float, *, by_submission: bool = True) 
     unremarkable-looking pairs in a flat list. As a cluster it is obvious.
     """
     dsu = _DSU()
-    kept = [p for p in pairs if p.score >= threshold]
+    kept = [p for p in pairs if p.score >= threshold]  # clusters use the mosaic score
     for p in kept:
         ka = p.a.submission if by_submission else p.a.rel
         kb = p.b.submission if by_submission else p.b.rel
@@ -552,11 +559,13 @@ def analyse(
             progress("compare", n + 1, len(cands), f"{a.rel} <-> {b.rel}")
         p = score_pair(a, b, co, cfg)
         population.append(p.score)
-        if p.score >= cfg.threshold * 0.6:
+        if p.score >= cfg.threshold * 0.6 or p.moss >= cfg.threshold:
             pairs.append(p)
 
     med, scale = add_z_scores(pairs, population)
-    pairs = [p for p in pairs if p.score >= cfg.threshold]
+    # Keep a pair if either score clears the threshold, so the list can be
+    # ranked by the mosaic score or by the MOSS score alone.
+    pairs = [p for p in pairs if p.score >= cfg.threshold or p.moss >= cfg.threshold]
     pairs.sort(key=lambda p: -p.score)
     clusters = cluster(pairs, cfg.cluster_threshold, by_submission=by_sub)
     return Report(

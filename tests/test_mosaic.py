@@ -375,6 +375,25 @@ class TestReportOutput(unittest.TestCase):
             self.assertEqual(len(blk["a_lines"]), 2)
             self.assertLessEqual(blk["a_lines"][0], blk["a_lines"][1])
 
+    def test_both_scores_and_rank_toggle(self):
+        html = report.build_html(self.rep)
+        self.assertIn('data-rank="moss"', html)
+        self.assertIn('data-rank="mosaic"', html)
+        self.assertIn("MOSS score", html)
+        for p in self.rep.pairs:
+            self.assertIn('data-mosaic="%.4f" data-moss="%.4f"' % (p.score, p.moss), html)
+        data = json.loads(report.build_json(self.rep))
+        for jp, p in zip(data["pairs"], self.rep.pairs):
+            self.assertAlmostEqual(jp["moss_score"], round(p.moss, 4))
+        self.assertIn("document.body.dataset.rank = \"moss\"", report.build_html(self.rep, rank_by="moss"))
+
+    def test_pairs_kept_when_either_score_clears_threshold(self):
+        thr = self.rep.cfg.threshold
+        for p in self.rep.pairs:
+            self.assertTrue(p.score >= thr or p.moss >= thr)
+        self.assertEqual([p.score for p in self.rep.pairs],
+                         sorted((p.score for p in self.rep.pairs), reverse=True))
+
     def test_line_mapping_in_range(self):
         for p in self.rep.pairs:
             for bl in p.blocks:

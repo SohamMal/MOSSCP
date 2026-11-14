@@ -455,6 +455,15 @@ class Hub:
 # --- analysis ------------------------------------------------------------
 
 
+def top_pairs(pairs, n: int) -> list:
+    """The top n by mosaic score plus the top n by MOSS score, so either
+    ranking can be shown in full."""
+    by_mosaic = pairs[:n]
+    seen = {id(p) for p in by_mosaic}
+    extra = [p for p in sorted(pairs, key=lambda p: -p.moss)[:n] if id(p) not in seen]
+    return by_mosaic + extra
+
+
 def summarize(rep, elapsed: float) -> dict:
     top = [
         {
@@ -463,13 +472,16 @@ def summarize(rep, elapsed: float) -> dict:
             "sa": p.a.submission,
             "sb": p.b.submission,
             "score": round(p.score, 4),
+            "moss": round(p.moss, 4),
+            "moss_a": round(p.fp_a, 4),
+            "moss_b": round(p.fp_b, 4),
             "z": round(p.z, 2),
             "fp": round(p.fp, 4),
             "ast": round(p.ast, 4),
             "rename": round(p.rename.score, 4),
             "reasons": p.reasons,
         }
-        for p in rep.pairs[:30]
+        for p in top_pairs(rep.pairs, 30)
     ]
     return {
         "files": len(rep.docs),
@@ -477,6 +489,7 @@ def summarize(rep, elapsed: float) -> dict:
         "pairs_examined": rep.n_compared,
         "above_threshold": len(rep.pairs),
         "flagged": sum(1 for p in rep.pairs if p.score >= 0.5),
+        "flagged_moss": sum(1 for p in rep.pairs if p.moss >= 0.5),
         "median": round(rep.median, 4),
         "suppressed": rep.cohort.suppressed_fp + rep.cohort.suppressed_tree,
         "skipped": len(rep.skipped),
