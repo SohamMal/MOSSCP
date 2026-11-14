@@ -1,11 +1,20 @@
 # mosaic rooms server -- memory-only, no volumes, no database.
 FROM python:3.12-slim
 
+# Predictor rooms compile each peer's mine.cpp, so the image needs g++.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends g++ \
+ && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 COPY mosaic ./mosaic
+# The branch-predictor simulator and the traces predictor rooms run on.
+# Point MOSAIC_BP_TRACES somewhere else to use other traces.
+COPY bpsim ./bpsim
 
 # Behind a cloud load balancer: trust X-Forwarded-For for rate limiting.
-# Never write bytecode or anything else: the container can run read-only.
+# Never write bytecode. Similarity rooms write nothing; predictor rooms need a
+# writable /tmp for the one build or run in progress (deleted straight after).
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     MOSAIC_BEHIND_PROXY=1
