@@ -134,9 +134,20 @@ class GitHubArchive:
         return commit["sha"]
 
 
+def clean_repo(raw: str) -> str:
+    """Accept owner/name, or a pasted GitHub URL / clone address."""
+    s = (raw or "").strip().strip("'\"").strip()
+    s = re.sub(r"^(https?://)?(www\.)?github\.com[/:]", "", s, flags=re.I)
+    s = re.sub(r"^git@github\.com:", "", s, flags=re.I)
+    s = re.sub(r"(\.git)?/*$", "", s)
+    parts = [p for p in s.split("/") if p]
+    return "/".join(parts[:2]) if len(parts) >= 2 else s
+
+
 def from_env(env) -> tuple[GitHubArchive | None, str | None]:
     """(archive, problem). Neither variable set means archiving is off."""
-    repo = (env.get("MOSAIC_GITHUB_REPO") or "").strip()
+    raw_repo = env.get("MOSAIC_GITHUB_REPO") or ""
+    repo = clean_repo(raw_repo)
     token = (env.get("MOSAIC_GITHUB_TOKEN") or "").strip()
     if not repo and not token:
         return None, None
@@ -144,4 +155,6 @@ def from_env(env) -> tuple[GitHubArchive | None, str | None]:
         return GitHubArchive(repo, token, branch=(env.get("MOSAIC_GITHUB_BRANCH") or "").strip() or None,
                              prefix=(env.get("MOSAIC_GITHUB_PREFIX") or "reports")), None
     except ValueError as exc:
+        if "owner/name" in str(exc):
+            return None, f"MOSAIC_GITHUB_REPO must look like owner/name (got {raw_repo.strip()!r})"
         return None, str(exc)

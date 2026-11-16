@@ -88,6 +88,11 @@ class TestArchive(unittest.TestCase):
         ar, why = archive.from_env({"MOSAIC_GITHUB_REPO": "nope"})
         self.assertIsNone(ar)
         self.assertTrue(why)
+        for pasted in ("https://github.com/me/reports", "github.com/me/reports/", "https://github.com/me/reports.git",
+                       "git@github.com:me/reports.git", " me/reports ", "https://github.com/me/reports/tree/main"):
+            self.assertEqual(archive.clean_repo(pasted), "me/reports", pasted)
+        ar, why = archive.from_env({"MOSAIC_GITHUB_REPO": "nope", "MOSAIC_GITHUB_TOKEN": "t"})
+        self.assertIn("'nope'", why)
         ar, why = archive.from_env({"MOSAIC_GITHUB_REPO": "me/reports", "MOSAIC_GITHUB_TOKEN": "t"})
         self.assertIsNotNone(ar)
         self.assertNotIn("t", ar.describe().replace("github.com/me/reports", ""))
