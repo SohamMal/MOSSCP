@@ -1,6 +1,23 @@
 # mosaic
 
-A plagiarism checker for source code that runs on your own machine. It is built to catch what MOSS misses.
+A plagiarism checker for source code that runs on your own machine. It runs **two independent algorithms** on every check and lets you switch between them:
+
+- **MOSS** (shown by default): Stanford MOSS's algorithm, on its own. A pair's percentages depend only on those two submissions.
+- **mosaic**: five signals judged against the whole class, built to catch what MOSS misses.
+
+### MOSS
+
+`mosaic/moss.py` follows the published algorithm behind MOSS (Schleimer, Wilcox & Aiken, *Winnowing*, SIGMOD 2003) and MOSS's documented options:
+
+- Whitespace and comments are ignored, and every identifier is the same token, so reformatting and renaming don't hide a copy. Nothing else is normalised.
+- Fingerprints are chosen by winnowing (k = 12 tokens, window 8).
+- Each submission is one program (MOSS `-d`). Files of the same submission are never compared.
+- Passages found in more than 10 submissions are ignored (MOSS `-m 10`), as is any provided base code (MOSS `-b`). Nothing else about the rest of the class affects a pair.
+- Results are listed like Stanford's page: **File 1 (x%) / File 2 (y%) / Lines Matched**, ranked by lines matched, top 250 (MOSS `-n`). Each percentage is the share of that submission covered by passages it shares with the other. Each match shows the passages side by side, colour-paired.
+
+Stanford has never published MOSS's source code, so its exact tokenizers and parameter values are unknown. Results follow the same method but won't match Stanford's numbers digit for digit. k, window, `-m` and `-n` can be changed.
+
+### mosaic
 
 MOSS does one thing: winnowing fingerprints over a stream of normalized tokens. That catches retyped and renamed code. It loses track as soon as a copier rewrites `for` as `while`, turns a `switch` into an `if/else` chain, splits statements or reorders functions. MOSS also gives you only a percentage, and it needs a base file before it will ignore skeleton code.
 
@@ -14,7 +31,7 @@ mosaic keeps MOSS's algorithm as one signal among five. It also judges every sco
 | **Compression distance (NCD)** | heavy but shallow obfuscation |
 | **Construct profile** | weak supporting evidence only |
 
-**Two scores, side by side.** Every pair shows its **mosaic score** (all five signals combined) and its **MOSS score** (winnowing-fingerprint overlap alone: the share of each file covered by shared passages, as MOSS measures it, except that provided code is left out of the file's size as well as the matches). The room dashboard and the report have a **Rank by: mosaic score / MOSS score** toggle; in the terminal use `--rank-by moss`. A pair is listed when either score reaches the threshold. A big gap between the two (high mosaic, low MOSS) is the signature of a rewritten copy.
+A pair with a high mosaic score but a low MOSS percentage is the signature of a rewritten copy.
 
 On top of the signals, at the cohort level:
 
@@ -42,15 +59,20 @@ python -m mosaic submissions/ --base skeleton/ --lang cpp --json results.json --
 
 | Option | Default | |
 |---|---|---|
-| `-t, --threshold` | 0.25 | report pairs whose mosaic or MOSS score reaches this |
-| `--rank-by` | mosaic | order pairs by `mosaic` or `moss` score (the HTML report also has a toggle) |
+| `--algo` | moss | results printed in the terminal and shown first in the report (`moss` or `mosaic`) |
+| `-m, --max-matches` | 10 | MOSS: ignore passages found in more than this many submissions |
+| `-n, --show` | 250 | MOSS: pairs listed |
+| `--moss-k`, `--moss-w` | 12, 8 | MOSS: k-gram length and winnowing window |
+| `-t, --threshold` | 0.25 | mosaic: report pairs whose mosaic score reaches this |
 | `--base PATH` | | provided code to ignore (repeatable) |
 | `--max-df` | 0.30 | auto-suppress material shared by more than this share of submissions |
-| `-k`, `-w` | 14, 12 | k-gram length and winnowing window |
+| `-k`, `-w` | 14, 12 | mosaic: k-gram length and winnowing window |
 | `--min-subtree` | 6 | smallest structural match counted, in nodes |
 | `--lang` | auto | restrict to one language |
 | `--detail` | 60 | pairs expanded with side-by-side code in the report |
-| `--json PATH` | | machine-readable results |
+| `--json PATH` | | machine-readable results of both algorithms |
+
+The report opens on the MOSS results, with a **MOSS / mosaic** toggle at the top, a **search** box (by submission or file name) and an **at least x%** filter.
 
 ## Rooms: collect submissions from everyone's own computer
 
@@ -62,8 +84,10 @@ Then open `http://127.0.0.1:8765/create`.
 
 1. **The admin creates a room.** They give it a name, choose **Hidden** or **Visible** (see below), and set how long it stays open. The room gets a code like `K7QM-29TX` and a join link.
 2. **Peers join from their own PC.** They open the site, type the code (or use the link), enter their name or roll number, and drop in their folder or a `.zip`. They can replace or withdraw their own submission. They never see anyone else's files.
-3. **The admin runs the check** from the room page and gets the results table, clusters and full report.
-4. **The admin closes the room.** Every file and report in it is deleted and the code stops working. Rooms also close automatically when their time runs out, and stopping the server closes every room.
+3. **Checks run by themselves.** 15 seconds after the last change to a room's submissions (`--auto-run-delay`), both algorithms run again. The admin can also click **Run check**.
+4. **Everyone sees the live leaderboard.** Peers see who has uploaded so far and the full pair leaderboard, with names and scores, updated every few seconds: MOSS by default, mosaic on the toggle, with a search box. Peers are told this before they upload. They never see code.
+5. **The latest report is saved permanently** to a private GitHub repository, if one is configured (see below). It is overwritten after every check.
+6. **The admin closes the room.** Uploads are deleted and the code stops working; the saved report on GitHub stays. Rooms also close automatically when their time runs out, and stopping the server closes every room.
 
 One server can hold many rooms at once. Closing one room doesn't affect the others.
 
@@ -115,9 +139,27 @@ Things to know:
 
 The included traces take about a quarter of a second per submission on a laptop. On Render's free tier, allow roughly ten times that.
 
+### Saving reports permanently (GitHub)
+
+Rooms live in memory and Render's free disk is wiped on every restart, so the permanent copy goes to a **private GitHub repository**. After every check, the room's `report.html` and `results.json` (both algorithms) are committed to
+
+```
+reports/<date>-<room name>-<room code>/
+```
+
+in one commit that replaces the previous copy. Git history keeps the earlier versions. The admin page shows when it was last saved, with a link. Hidden rooms' reports contain no code; Visible rooms' reports do.
+
+To turn it on:
+
+1. Create a **private** repository, for example `mosscp-reports`.
+2. Create a fine-grained personal access token: GitHub → Settings → Developer settings → Fine-grained tokens. Give it access to **only that repository** and the permission **Contents: Read and write**.
+3. On Render, open the service's **Environment** tab and set `MOSAIC_GITHUB_REPO` to `you/mosscp-reports` and `MOSAIC_GITHUB_TOKEN` to the token. Optional: `MOSAIC_GITHUB_BRANCH`, and `MOSAIC_GITHUB_PREFIX` (default `reports`).
+
+When neither variable is set, nothing is saved and rooms work as before. The server prints at start-up whether saving is on.
+
 ### Nothing is stored
 
-There is no database and no upload folder. Uploads, unpacked archives and reports exist only in the server's memory, and closing a room drops them. The one exception is predictor rooms: a compiler and a program need real files, so each build or run gets a private temporary folder that is deleted the moment it finishes, and only one exists at a time. A test runs two complete rooms (upload, unpack, check, report, close) and fails if anything is opened for writing. In hidden mode the admin never receives the code. In visible mode, code only reaches the admin's disk if they click *Download report*.
+There is no database and no upload folder. Uploads, unpacked archives and reports exist only in the server's memory, and closing a room drops them. If you configure GitHub saving, the latest report of each room is the one thing kept, and it is kept in your own repository. The one exception is predictor rooms: a compiler and a program need real files, so each build or run gets a private temporary folder that is deleted the moment it finishes, and only one exists at a time. A test runs two complete rooms (upload, unpack, check, report, close) and fails if anything is opened for writing. In hidden mode the admin never receives the code. In visible mode, code only reaches the admin's disk if they click *Download report*.
 
 A database would mean the files *are* stored somewhere, which is why there isn't one. The central piece is the memory-only server itself.
 
@@ -165,6 +207,8 @@ About Render's free plan:
 | `--max-room-hours` | 24 | longest a room may stay open |
 | `--max-upload-mb` | 25 | per peer upload |
 | `--max-room-mb` / `--max-total-mb` | 512 / 2048 | memory budgets per room and overall (`MOSAIC_MAX_ROOM_MB`, `MOSAIC_MAX_TOTAL_MB`) |
+| `--auto-run-delay` | 15 | seconds after the last change to a room's submissions before both algorithms run again (`MOSAIC_AUTO_RUN_DELAY`) |
+| `--no-auto-run` | | only check when the admin clicks Run check (`MOSAIC_AUTO_RUN=0`) |
 | `--keep-awake` | on on Render | while rooms are open, ping the public URL every 10 minutes so free hosts don't sleep (`MOSAIC_KEEP_AWAKE`) |
 | `--behind-proxy` | off (on in Docker) | trust `X-Forwarded-For` for rate limiting |
 

@@ -15,6 +15,7 @@ from collections import defaultdict
 from typing import Iterable, Sequence
 
 from .engine import Cluster, Document, Pair, Report
+from .moss import MossPair, MossReport, passage_lines
 from .structure import TreeMatch
 from .winnow import Block
 
@@ -125,6 +126,20 @@ a{color:var(--accent)}
   background:currentColor;opacity:.32;filter:blur(1.6px)}
 .private{border:1px solid var(--accent);color:var(--ink);border-radius:10px;padding:10px 14px;
   margin:0 0 18px;font-size:.88rem;background:color-mix(in srgb,var(--accent) 8%,transparent)}
+.toolbar{position:sticky;top:0;z-index:5;background:var(--bg);display:flex;gap:10px;align-items:center;
+  flex-wrap:wrap;padding:10px 0;margin:0 0 6px;border-bottom:1px solid var(--line)}
+.toolbar input[type=search],.toolbar input[type=number]{font:inherit;font-size:.88rem;color:var(--ink);background:var(--panel);
+  border:1px solid var(--line);border-radius:8px;padding:6px 10px}
+.toolbar input[type=search]{flex:1;min-width:180px}
+.toolbar input[type=number]{width:5.5em}
+.toolbar label{display:flex;gap:6px;align-items:center;font-size:.84rem;color:var(--muted)}
+.mtable td a{text-decoration:none}
+.mtable td a:hover{text-decoration:underline}
+.lines{font-variant-numeric:tabular-nums;text-align:right}
+.ptable{margin:0 0 12px}
+.ptable td{padding:4px 8px}
+.swatch{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:middle;margin-right:6px}
+[data-hide]{display:none!important}
 .footer{margin-top:48px;color:var(--muted);font-size:.78rem;border-top:1px solid var(--line);padding-top:14px}
 """
 
@@ -158,35 +173,41 @@ _JS = """
     });
     panel.querySelectorAll('.nofill span.b0,.nofill span.b1').forEach(function(){});
   });
-  function rank(by){
-    document.querySelectorAll('.rankable').forEach(function(box){
-      var items = Array.prototype.slice.call(box.querySelectorAll(':scope > [data-mosaic]'));
-      items.sort(function(x, y){
-        var a = parseFloat(y.dataset[by]) - parseFloat(x.dataset[by]);
-        if (a) return a;
-        var o = by === 'moss' ? 'mosaic' : 'moss';
-        return parseFloat(y.dataset[o]) - parseFloat(x.dataset[o]);
+  function view(v){
+    document.querySelectorAll('[data-view]').forEach(function(sec){ sec.hidden = sec.dataset.view !== v; });
+    document.querySelectorAll('.seg [data-algo]').forEach(function(b){
+      b.setAttribute('aria-pressed', b.dataset.algo === v ? 'true' : 'false');
+    });
+    try { localStorage.setItem('mosaic-view', v); } catch (e) {}
+    filter();
+  }
+  function filter(){
+    var q = (document.getElementById('q') || {}).value || '';
+    q = q.trim().toLowerCase();
+    var min = parseFloat((document.getElementById('minpct') || {}).value) || 0;
+    document.querySelectorAll('[data-view]').forEach(function(sec){
+      if (sec.hidden) return;
+      var shown = 0, total = 0;
+      sec.querySelectorAll('[data-names]').forEach(function(el){
+        var ok = (!q || el.dataset.names.indexOf(q) >= 0) && (100 * parseFloat(el.dataset.pct || '1') >= min);
+        if (ok) el.removeAttribute('data-hide'); else el.setAttribute('data-hide', '1');
+        if (el.hasAttribute('data-count')) { total++; if (ok) shown++; }
       });
-      items.forEach(function(n){ box.appendChild(n); });
+      var c = document.getElementById('shown');
+      if (c) c.textContent = (q || min) ? ('showing ' + shown + ' of ' + total + ' pairs') : (total + ' pairs');
     });
-    document.querySelectorAll('.seg [data-rank]').forEach(function(b){
-      b.setAttribute('aria-pressed', b.dataset.rank === by ? 'true' : 'false');
-    });
-    document.querySelectorAll('th[data-col]').forEach(function(th){
-      th.classList.toggle('sorted', th.dataset.col === by);
-    });
-    document.querySelectorAll('[data-rank-label]').forEach(function(n){
-      n.textContent = by === 'moss' ? 'MOSS score' : 'mosaic score';
-    });
-    try { localStorage.setItem('mosaic-rank', by); } catch (e) {}
   }
   document.addEventListener('click', function(e){
-    var b = e.target.closest('.seg [data-rank]');
-    if (b) rank(b.dataset.rank);
+    var b = e.target.closest('.seg [data-algo]');
+    if (b) view(b.dataset.algo);
   });
-  var start = document.body.dataset.rank || 'mosaic';
-  try { start = localStorage.getItem('mosaic-rank') || start; } catch (e) {}
-  if (start !== 'mosaic') rank(start);
+  document.addEventListener('input', function(e){
+    if (e.target.id === 'q' || e.target.id === 'minpct') filter();
+  });
+  var start = document.body.dataset.start || 'moss';
+  try { start = localStorage.getItem('mosaic-view') || start; } catch (e) {}
+  if (!document.querySelector('[data-view="' + start + '"]')) start = (document.querySelector('[data-view]') || {dataset: {}}).dataset.view;
+  if (start) view(start);
 })();
 """
 
@@ -236,14 +257,18 @@ def _pct(x: float) -> str:
     return f"{round(100 * x)}%"
 
 
-def _moss(p: Pair) -> str:
-    """MOSS-style cell: the ranking value, with each file's share as MOSS shows it."""
+def _overlap(p: Pair) -> str:
+    """mosaic's own token-overlap signal, with each file's share."""
     return '<span class="moss score %s">%s</span> <small class="note">(%s / %s)</small>' % (
-        sev_class(p.moss), _pct(p.moss), _pct(p.fp_a), _pct(p.fp_b))
+        sev_class(p.fp), _pct(p.fp), _pct(p.fp_a), _pct(p.fp_b))
 
 
-def _rank_attrs(score: float, moss: float) -> str:
-    return 'data-mosaic="%.4f" data-moss="%.4f"' % (score, moss)
+def _names(*parts: str) -> str:
+    return html.escape(" ".join(parts).lower(), quote=True)
+
+
+def _filter_attrs(score: float, *names: str, count: bool = False) -> str:
+    return 'data-names="%s" data-pct="%.4f"%s' % (_names(*names), score, " data-count" if count else "")
 
 
 def render_code(doc: Document, blk: dict[int, int], ast_lines: set[int], max_lines: int) -> str:
@@ -418,13 +443,13 @@ def _pair_detail(p: Pair, cfg_lines: int, redact: bool = False) -> str:
     )
     summary = (
         '<summary><span class="note">mosaic</span><span class="score %s">%s</span>'
-        '<span class="note">MOSS</span>%s'
+        '<span class="note">token overlap</span>%s'
         '<span class="mono">%s</span><span class="note">vs</span>'
         '<span class="mono">%s</span>%s<span style="margin-left:auto">%s</span></summary>'
         % (
             sev_class(p.score),
             _pct(p.score),
-            _moss(p),
+            _overlap(p),
             html.escape(p.a.rel),
             html.escape(p.b.rel),
             ('<span class="chip">z=%.1f</span>' % p.z) if p.z else "",
@@ -448,7 +473,8 @@ def _pair_detail(p: Pair, cfg_lines: int, redact: bool = False) -> str:
             _codebox(p.b, blk_b, ast_b, cfg_lines, redact),
         )
     )
-    return '<details class="pair" %s>%s%s</details>' % (_rank_attrs(p.score, p.moss), summary, body)
+    return '<details class="pair" %s>%s%s</details>' % (
+        _filter_attrs(p.score, p.a.submission, p.b.submission, p.a.rel, p.b.rel), summary, body)
 
 
 def _codebox(doc: Document, blk: dict[int, int], ast_lines: set[int], max_lines: int,
@@ -484,6 +510,104 @@ def _clusters(clusters: Sequence[Cluster]) -> str:
     return "".join(out)
 
 
+# --- MOSS view -------------------------------------------------------------
+
+
+def _moss_cell(name: str, pct: float, href: str) -> str:
+    return '<a href="%s" class="mono">%s/ <span class="%s">(%s)</span></a>' % (
+        href, html.escape(name), sev_class(pct), _pct(pct))
+
+
+def _moss_table(mrep: MossReport) -> str:
+    rows = []
+    for i, p in enumerate(mrep.shown):
+        names = [p.a.name, p.b.name] + [f.rel for f in p.a.files + p.b.files]
+        rows.append(
+            "<tr %s><td>%s</td><td>%s</td><td class='lines'>%d</td></tr>"
+            % (_filter_attrs(p.score, *names, count=True), _moss_cell(p.a.name, p.pct_a, f"#m{i}"),
+               _moss_cell(p.b.name, p.pct_b, f"#m{i}"), p.lines)
+        )
+    if not rows:
+        return '<p class="note">No matching passages between any two submissions.</p>'
+    return (
+        "<div class='panel'><table class='mtable'><thead><tr><th>File 1</th><th>File 2</th>"
+        "<th class='lines'>Lines Matched</th></tr></thead><tbody>%s</tbody></table></div>" % "".join(rows)
+    )
+
+
+def _moss_detail(i: int, p: MossPair, max_lines: int, redact: bool) -> str:
+    loc = [passage_lines(p, ps) for ps in p.passages]
+    maps: dict[str, dict[int, int]] = defaultdict(dict)
+    for idx, (la, lb) in enumerate(loc):
+        for rel, l0, l1 in (la, lb):
+            for ln in range(l0, l1 + 1):
+                maps[rel].setdefault(ln, idx)
+    prow = "".join(
+        "<tr data-blk='%d'><td><span class='swatch b%d'></span><span class='mono'>%s</span> %d&ndash;%d</td>"
+        "<td><span class='mono'>%s</span> %d&ndash;%d</td></tr>"
+        % (idx, idx % PALETTE, html.escape(la[0]), la[1], la[2], html.escape(lb[0]), lb[1], lb[2])
+        for idx, (la, lb) in enumerate(loc)
+    )
+    render = render_silhouette if redact else render_code
+
+    def boxes(prog) -> str:
+        out = []
+        for f in prog.files:
+            blk = maps.get(f.rel, {})
+            if not blk:
+                continue
+            out.append(
+                '<div class="codebox" style="margin-bottom:10px"><div class="codehead"><span class="mono">%s</span>'
+                "<span>%d lines</span></div><pre><code>%s</code></pre></div>"
+                % (html.escape(f.rel), f.n_lines, render(f, blk, set(), max_lines))
+            )
+        return "".join(out)
+
+    names = [p.a.name, p.b.name] + [f.rel for f in p.a.files + p.b.files]
+    return (
+        '<details class="pair" id="m%d" %s><summary><span class="mono">%s</span> <span class="score %s">(%s)</span>'
+        '<span class="note">vs</span><span class="mono">%s</span> <span class="score %s">(%s)</span>'
+        '<span class="note" style="margin-left:auto">%d lines matched &middot; %d passage%s</span></summary>'
+        '<div class="pbody"><table class="ptable"><thead><tr><th>%s</th><th>%s</th></tr></thead><tbody>%s</tbody></table>'
+        '<div class="side"><div>%s</div><div>%s</div></div></div></details>'
+        % (i, _filter_attrs(p.score, *names), html.escape(p.a.name), sev_class(p.pct_a), _pct(p.pct_a),
+           html.escape(p.b.name), sev_class(p.pct_b), _pct(p.pct_b), p.lines, len(p.passages),
+           "" if len(p.passages) == 1 else "s", html.escape(p.a.name), html.escape(p.b.name), prow,
+           boxes(p.a), boxes(p.b))
+    )
+
+
+def _moss_section(mrep: MossReport, detail: int, max_lines: int, redact: bool) -> str:
+    c = mrep.cfg
+    cards = [
+        (len(mrep.programs), "submissions"),
+        (f"{mrep.n_compared:,}", "pairs examined"),
+        (len(mrep.pairs), "pairs with matches"),
+        (sum(1 for p in mrep.pairs if p.score >= 0.5), "MOSS &ge; 50%"),
+    ]
+    card_html = "".join(
+        '<div class="card"><div class="n">%s</div><div class="l">%s</div></div>' % (n, l) for n, l in cards
+    )
+    shown = mrep.shown
+    details = "".join(_moss_detail(i, p, max_lines, redact) for i, p in enumerate(shown[:detail]))
+    more = (
+        '<p class="note">The first %d matches are expanded; the table lists %d.</p>' % (detail, len(shown))
+        if len(shown) > detail else ""
+    )
+    return f"""<section data-view="moss">
+<div class="cards">{card_html}</div>
+<p class="note">MOSS algorithm: winnowing over normalized tokens (k={c.k}, window {c.w}); passages found in more
+than {c.max_matches} submissions are ignored (-m {c.max_matches}){", as is the provided base code" if mrep.ignored else ""}.
+Each percentage is the share of that submission covered by passages it shares with the other. Ranked by lines matched;
+the top {c.show} pairs are listed. Other submissions do not change a pair's score.</p>
+<h2>Results</h2>
+{_moss_table(mrep)}
+<h2>Matches</h2>
+<p class="note">Each colour pairs a passage with its counterpart; hover to highlight.</p>
+{details}{more}
+</section>"""
+
+
 def _submission_table(rep: Report) -> str:
     """Aggregate file pairs up to submission pairs."""
     agg: dict[tuple[str, str], list[Pair]] = defaultdict(list)
@@ -493,17 +617,17 @@ def _submission_table(rep: Report) -> str:
     rows = []
     for (a, b), ps in sorted(agg.items(), key=lambda kv: -max(p.score for p in kv[1])):
         best = max(ps, key=lambda p: p.score)
-        best_moss = max(ps, key=lambda p: p.moss)
+        best_fp = max(ps, key=lambda p: p.fp)
         rows.append(
             "<tr %s><td class='mono'>%s</td><td class='mono'>%s</td>"
             "<td class='score %s'>%s</td><td>%s</td><td>%s</td><td class='note'>%s</td></tr>"
             % (
-                _rank_attrs(best.score, best_moss.moss),
+                _filter_attrs(best.score, a, b, *(x for p in ps for x in (p.a.rel, p.b.rel)), count=True),
                 html.escape(a),
                 html.escape(b),
                 sev_class(best.score),
                 _pct(best.score),
-                _moss(best_moss),
+                _overlap(best_fp),
                 _bars(best),
                 html.escape("%d file pair%s" % (len(ps), "" if len(ps) == 1 else "s")),
             )
@@ -512,8 +636,8 @@ def _submission_table(rep: Report) -> str:
         return '<p class="note">Nothing above threshold.</p>'
     return (
         "<div class='panel'><table><thead><tr><th>Submission</th><th>Submission</th>"
-        "<th data-col='mosaic' class='sorted'>mosaic score</th><th data-col='moss'>MOSS score</th>"
-        "<th>Signals</th><th></th></tr></thead><tbody class='rankable'>%s</tbody></table></div>"
+        "<th>mosaic score</th><th>Token overlap</th>"
+        "<th>Signals</th><th></th></tr></thead><tbody>%s</tbody></table></div>"
         % "".join(rows)
     )
 
@@ -525,7 +649,8 @@ def build_html(
     max_lines: int = 400,
     title: str = "Similarity report",
     redact: bool = False,
-    rank_by: str = "mosaic",
+    moss_rep: MossReport | None = None,
+    view: str = "moss",
 ) -> str:
     """Render the report. With redact=True no source text is included at all:
     code panes show blurred line shapes with the matching regions marked."""
@@ -538,27 +663,27 @@ def build_html(
         (f"{rep.n_compared:,}", "pairs examined"),
         (len(rep.pairs), "above threshold"),
         (len(flagged), "mosaic &ge; 50%"),
-        (sum(1 for p in rep.pairs if p.moss >= 0.5), "MOSS &ge; 50%"),
         (len(rep.clusters), "clusters"),
     ]
     card_html = "".join(
         '<div class="card"><div class="n">%s</div><div class="l">%s</div></div>' % (n, l)
         for n, l in cards
     )
-    # Expand the top pairs by either score, so both rankings have evidence.
-    shown = rep.pairs[:detail]
-    seen = {id(p) for p in shown}
-    shown += [p for p in sorted(rep.pairs, key=lambda p: -p.moss)[:detail] if id(p) not in seen]
+    shown = [p for p in rep.pairs if p.score >= cfg.threshold][:detail]
     details = "".join(_pair_detail(p, max_lines, redact) for p in shown)
-    rank_by = "moss" if rank_by == "moss" else "mosaic"
-    rank_bar = (
-        '<div class="rankbar"><span class="note">Rank by</span><span class="seg">'
-        '<button type="button" data-rank="mosaic" aria-pressed="%s">mosaic score</button>'
-        '<button type="button" data-rank="moss" aria-pressed="%s">MOSS score</button></span>'
-        '<span class="note">mosaic combines five signals; MOSS is token-fingerprint overlap '
-        "alone (each file's share in brackets), the number MOSS itself reports.</span></div>"
-        % ("true" if rank_by == "mosaic" else "false", "true" if rank_by == "moss" else "false")
+    has_moss = moss_rep is not None
+    view = "moss" if view == "moss" and has_moss else "mosaic"
+    toolbar = (
+        '<div class="toolbar">%s<input type="search" id="q" placeholder="Search by name or file" aria-label="Search by name or file">'
+        '<label>at least <input type="number" id="minpct" min="0" max="100" step="5" value="0" aria-label="Minimum percent">%%</label>'
+        '<span class="note" id="shown"></span></div>'
+        % ('<span class="seg" role="group" aria-label="Algorithm">'
+           '<button type="button" data-algo="moss" aria-pressed="%s">MOSS</button>'
+           '<button type="button" data-algo="mosaic" aria-pressed="%s">mosaic</button></span>'
+           % ("true" if view == "moss" else "false", "true" if view == "mosaic" else "false")
+           if has_moss else "")
     )
+    moss_html = _moss_section(moss_rep, detail, max_lines, redact) if has_moss else ""
     private_note = (
         '<div class="private"><b>Private room.</b> Code is hidden from everyone, including the host. '
         "Each pane shows the shape of a file; coloured bars mark the passages that match "
@@ -568,8 +693,8 @@ def build_html(
     )
     more = (
         '<p class="note">%d further pairs are listed above the threshold but not expanded here '
-        "(raise --detail to include them).</p>" % (len(rep.pairs) - len(shown))
-        if len(rep.pairs) > len(shown)
+        "(raise --detail to include them).</p>" % (len([p for p in rep.pairs if p.score >= cfg.threshold]) - len(shown))
+        if len([p for p in rep.pairs if p.score >= cfg.threshold]) > len(shown)
         else ""
     )
     suppressed = (
@@ -586,10 +711,14 @@ def build_html(
 <style>{_CSS}</style>
 <div class="wrap">
 <h1>{html.escape(title)}</h1>
-<p class="sub">{len(rep.docs)} files in {n_sub} submissions &middot; k={cfg.k}, w={cfg.w},
- min subtree {cfg.min_subtree} &middot; threshold {cfg.threshold:.2f} &middot; {stamp}</p>
+<p class="sub">{len(rep.docs)} files in {n_sub} submissions &middot; {stamp}</p>
 {private_note}
-
+{toolbar}
+{moss_html}
+<section data-view="mosaic">
+<p class="note">mosaic: five signals (token fingerprints, normalized structure, renaming, compression, construct
+profile) judged against the class &middot; k={cfg.k}, w={cfg.w}, min subtree {cfg.min_subtree} &middot;
+threshold {cfg.threshold:.2f}</p>
 <div class="cards">{card_html}</div>
 <div class="panel" style="margin-top:10px">
   {_histogram(rep.pairs, cfg.threshold)}
@@ -599,7 +728,6 @@ def build_html(
   {html.escape(suppressed)}.</p>
 </div>
 
-{rank_bar}
 <h2>Submission pairs</h2>
 {_submission_table(rep)}
 
@@ -609,18 +737,42 @@ def build_html(
 <h2>Evidence</h2>
 <p class="note">Left border: grey = shared token passage (MOSS-style), purple = identical
 normalized structure. Background colour pairs a passage with its counterpart.</p>
-<div class="rankable">{details}</div>
+{details}
 {more}
+</section>
 
 <div class="footer">Generated by mosaic. Similarity is evidence, not a verdict &mdash;
 every flagged pair needs a human to read it.</div>
 </div>
-<script>document.body.dataset.rank = {json.dumps(rank_by)};</script>
+<script>document.body.dataset.start = {json.dumps(view)};</script>
 <script>{_JS}</script>
 """
 
 
-def build_json(rep: Report, *, redact: bool = False) -> str:
+def moss_json(mrep: MossReport) -> dict:
+    c = mrep.cfg
+    return {
+        "config": {"k": c.k, "w": c.w, "max_matches": c.max_matches, "show": c.show},
+        "submissions": [p.name for p in mrep.programs],
+        "pairs_examined": mrep.n_compared,
+        "pairs": [
+            {
+                "a": p.a.name,
+                "b": p.b.name,
+                "pct_a": round(p.pct_a, 4),
+                "pct_b": round(p.pct_b, 4),
+                "lines": p.lines,
+                "passages": [
+                    {"a": {"file": la[0], "lines": [la[1], la[2]]}, "b": {"file": lb[0], "lines": [lb[1], lb[2]]}}
+                    for la, lb in (passage_lines(p, ps) for ps in p.passages)
+                ],
+            }
+            for p in mrep.shown
+        ],
+    }
+
+
+def build_json(rep: Report, *, redact: bool = False, moss_rep: MossReport | None = None) -> str:
     """Machine-readable results. With redact=True identifier names are left
     out; line ranges and scores remain."""
     out = {
@@ -685,6 +837,8 @@ def build_json(rep: Report, *, redact: bool = False) -> str:
             {"members": c.members, "mean_score": round(c.mean_score, 4)} for c in rep.clusters
         ],
     }
+    if moss_rep is not None:
+        out = {"redacted": redact, "moss": moss_json(moss_rep), "mosaic": out}
     return json.dumps(out, indent=2)
 
 

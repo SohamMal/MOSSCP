@@ -443,17 +443,27 @@ class TestReportOutput(unittest.TestCase):
             self.assertEqual(len(blk["a_lines"]), 2)
             self.assertLessEqual(blk["a_lines"][0], blk["a_lines"][1])
 
-    def test_both_scores_and_rank_toggle(self):
-        html = report.build_html(self.rep)
-        self.assertIn('data-rank="moss"', html)
-        self.assertIn('data-rank="mosaic"', html)
-        self.assertIn("MOSS score", html)
-        for p in self.rep.pairs:
-            self.assertIn('data-mosaic="%.4f" data-moss="%.4f"' % (p.score, p.moss), html)
-        data = json.loads(report.build_json(self.rep))
-        for jp, p in zip(data["pairs"], self.rep.pairs):
-            self.assertAlmostEqual(jp["moss_score"], round(p.moss, 4))
-        self.assertIn("document.body.dataset.rank = \"moss\"", report.build_html(self.rep, rank_by="moss"))
+    def test_algorithm_toggle_and_filters(self):
+        from mosaic import moss
+
+        mrep = moss.run_paths([CORPUS])
+        html = report.build_html(self.rep, moss_rep=mrep)
+        self.assertIn('data-algo="moss" aria-pressed="true"', html)  # MOSS first by default
+        self.assertIn('data-algo="mosaic"', html)
+        self.assertIn('<section data-view="moss">', html)
+        self.assertIn('<section data-view="mosaic">', html)
+        self.assertIn('id="q"', html)
+        self.assertIn('id="minpct"', html)
+        self.assertIn("Lines Matched", html)
+        for p in mrep.shown:
+            self.assertIn('data-names="%s' % p.a.name.lower(), html)
+        self.assertIn('document.body.dataset.start = "mosaic"', report.build_html(self.rep, moss_rep=mrep, view="mosaic"))
+        # without MOSS results there is only the mosaic view
+        plain = report.build_html(self.rep)
+        self.assertNotIn('data-algo=', plain)
+        data = json.loads(report.build_json(self.rep, moss_rep=mrep))
+        self.assertEqual(set(data), {"redacted", "moss", "mosaic"})
+        self.assertEqual(len(data["moss"]["pairs"]), len(mrep.shown))
 
     def test_pairs_kept_when_either_score_clears_threshold(self):
         thr = self.rep.cfg.threshold
@@ -483,7 +493,9 @@ class TestCli(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertTrue(os.path.getsize(out) > 10_000)
             with open(js, encoding="utf-8") as fh:
-                self.assertTrue(json.load(fh)["pairs"])
+                data = json.load(fh)
+            self.assertTrue(data["mosaic"]["pairs"])
+            self.assertTrue(data["moss"]["pairs"])
 
     def test_missing_path_is_an_error(self):
         from mosaic.cli import main

@@ -8,6 +8,7 @@ import sys
 import time
 import webbrowser
 
+from . import moss
 from . import report as report_mod
 from .engine import Config, run
 from .tokens import LANGS
@@ -17,9 +18,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="mosaic",
         description=(
-            "Source-code similarity detection. Combines MOSS-style winnowing "
-            "fingerprints with normalized-structure matching, consistent-rename "
-            "detection, compression distance and cohort statistics. "
+            "Source-code similarity detection with two independent algorithms: "
+            "MOSS (winnowing fingerprints, as Stanford's MOSS) and mosaic (fingerprints "
+            "plus normalized-structure matching, consistent-rename detection, "
+            "compression distance and cohort statistics). "
             "Run `mosaic serve` to collect submissions from peers through a "
             "memory-only web session."
         ),
@@ -49,18 +51,25 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--max-gap", type=int, default=48,
                    help="token gap tolerated inside one matched passage")
     g.add_argument("-t", "--threshold", type=float, default=0.25,
-                   help="report pairs whose mosaic or MOSS score reaches this")
+                   help="mosaic: report pairs whose mosaic score reaches this")
     g.add_argument("--cluster-threshold", type=float, default=0.45,
                    help="edge score for transitive grouping")
     g.add_argument("--max-df", type=float, default=0.30,
                    help="suppress material shared by more than this share of submissions")
 
+    g = p.add_argument_group("MOSS")
+    g.add_argument("--moss-k", type=int, default=12, help="MOSS k-gram length in tokens")
+    g.add_argument("--moss-w", type=int, default=8, help="MOSS winnowing window")
+    g.add_argument("-m", "--max-matches", type=int, default=10,
+                   help="MOSS -m: ignore passages found in more than this many submissions")
+    g.add_argument("-n", "--show", type=int, default=250, help="MOSS -n: pairs listed")
+
     g = p.add_argument_group("report")
     g.add_argument("--detail", type=int, default=60, help="pairs to expand with side-by-side code")
     g.add_argument("--max-lines", type=int, default=400, help="code lines per pane")
     g.add_argument("--top", type=int, default=20, help="pairs to print to the terminal")
-    g.add_argument("--rank-by", choices=("mosaic", "moss"), default="mosaic",
-                   help="order pairs by the mosaic score or by the MOSS score")
+    g.add_argument("--algo", choices=("moss", "mosaic"), default="moss",
+                   help="results printed here and shown first in the report")
     g.add_argument("--title", default="Similarity report")
     g.add_argument("-q", "--quiet", action="store_true")
     return p
@@ -111,31 +120,57 @@ def main(argv: list[str] | None = None) -> int:
         lang=args.lang,
     )
 
+    mcfg = moss.MossConfig(k=args.moss_k, w=args.moss_w, max_matches=args.max_matches, show=args.show,
+                           by_dir=args.by_dir is not False, lang=args.lang)
+
     t0 = time.time()
     rep = run(args.paths, cfg, args.base, progress=_progress(args.quiet))
+    mrep = moss.run_paths(args.paths, mcfg, args.base)
     elapsed = time.time() - t0
 
-    if not rep.docs:
+    if not rep.docs and not mrep.programs:
         sys.stderr.write("mosaic: no source files found (check --lang / --min-tokens)\n")
         return 1
 
     report_mod.write_html(
         rep, args.out, detail=args.detail, max_lines=args.max_lines, title=args.title,
-        rank_by=args.rank_by,
+        moss_rep=mrep, view=args.algo,
     )
     if args.json_out:
         with open(args.json_out, "w", encoding="utf-8", newline="\n") as fh:
-            fh.write(report_mod.build_json(rep))
+            fh.write(report_mod.build_json(rep, moss_rep=mrep))
 
     if not args.quiet:
-        _print_summary(rep, args.top, elapsed, args.out, args.json_out, args.rank_by)
+        if args.algo == "moss":
+            _print_moss(mrep, args.top, elapsed, args.out, args.json_out)
+        else:
+            _print_summary(rep, args.top, elapsed, args.out, args.json_out)
     if args.open:
         webbrowser.open("file://" + os.path.abspath(args.out))
     return 0
 
 
-def _print_summary(rep, top: int, elapsed: float, out: str, json_out: str | None,
-                   rank_by: str = "mosaic") -> None:
+def _print_moss(mrep, top: int, elapsed: float, out: str, json_out: str | None) -> None:
+    print()
+    print(f"  MOSS: {len(mrep.programs)} submissions, {mrep.n_compared:,} pairs examined in {elapsed:.1f}s")
+    print()
+    if not mrep.pairs:
+        print("  no matches")
+    else:
+        print(f"  {'File 1':<34} {'File 2':<34} {'Lines':>6}")
+        for p in mrep.pairs[:top]:
+            a = f"{p.a.name}/ ({p.pct_a*100:.0f}%)"
+            b = f"{p.b.name}/ ({p.pct_b*100:.0f}%)"
+            print(f"  {a:<34} {b:<34} {p.lines:>6}")
+        if len(mrep.pairs) > top:
+            print(f"  ... and {len(mrep.pairs) - top} more")
+    print()
+    print(f"  report: {out}  (use --algo mosaic for the mosaic ranking)")
+    if json_out:
+        print(f"  json:   {json_out}")
+
+
+def _print_summary(rep, top: int, elapsed: float, out: str, json_out: str | None) -> None:
     n_sub = len({d.submission for d in rep.docs})
     print()
     print(f"  {len(rep.docs)} files, {n_sub} submissions, "
@@ -149,13 +184,12 @@ def _print_summary(rep, top: int, elapsed: float, out: str, json_out: str | None
     if not rep.pairs:
         print("  nothing above threshold")
     else:
-        ranked = sorted(rep.pairs, key=lambda p: -p.moss) if rank_by == "moss" else rep.pairs
-        print(f"  ranked by {'MOSS' if rank_by == 'moss' else 'mosaic'} score")
-        print(f"  {'mosaic':>6} {'moss':>5} {'z':>5} {'str':>5}  pair")
+        ranked = rep.pairs
+        print(f"  {'mosaic':>6} {'tok':>5} {'z':>5} {'str':>5}  pair")
         print(f"  {'-'*6} {'-'*5} {'-'*5} {'-'*5}  {'-'*48}")
         for p in ranked[:top]:
             z = f"{p.z:5.1f}" if p.z else "    -"
-            print(f"  {p.score*100:5.0f}% {p.moss*100:4.0f}% {z} {p.ast*100:4.0f}%  "
+            print(f"  {p.score*100:5.0f}% {p.fp*100:4.0f}% {z} {p.ast*100:4.0f}%  "
                   f"{p.a.rel} <-> {p.b.rel}")
             if p.reasons:
                 print(f"         {'; '.join(p.reasons[:2])}")
