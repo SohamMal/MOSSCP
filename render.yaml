@@ -20,3 +20,9 @@ services:
         value: "120"
       - key: MOSAIC_MAX_ROOMS
         value: "15"
+      # Optional: keep every room's latest report in a private GitHub repo.
+      # Set both under the service's Environment tab (see README).
+      - key: MOSAIC_GITHUB_REPO
+        sync: false
+      - key: MOSAIC_GITHUB_TOKEN
+        sync: false

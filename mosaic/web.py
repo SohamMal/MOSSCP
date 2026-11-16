@@ -47,7 +47,9 @@ from email.parser import BytesParser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
+from . import archive as archive_mod
 from . import bpeval
+from . import moss as moss_mod
 from . import report as report_mod
 from .engine import Config, is_source_path, run_sources
 from .tokens import EXT_MAP, LANGS
@@ -296,6 +298,15 @@ class Room:
         self.ended = False
         self.discarded = 0
         self.lock = threading.RLock()
+        # automatic checks and the permanent copy (similarity rooms)
+        self.auto_run = False
+        self.archived = False
+        self.last_change = self.created
+        self.auto_tried = -1  # version the last automatic check started from
+        self.opts: dict = {"threshold": 0.25, "lang": None}
+        self.archive_dir = "%s-%s-%s" % (time.strftime("%Y-%m-%d", time.gmtime(self.created)),
+                                         archive_mod.slug(name), code)
+        self.archive_status: dict = {}
 
     @property
     def private(self) -> bool:
@@ -318,6 +329,7 @@ class Room:
 
     def touch(self) -> None:
         self.version += 1
+        self.last_change = time.time()
 
     def wipe(self) -> None:
         """Drop every upload and report of this room."""
@@ -407,6 +419,9 @@ class Room:
                 "limits": {"room_bytes": self.limits.room_bytes, "peer_bytes": self.limits.peer_bytes},
                 "analysis": a,
                 "languages": sorted(LANGS),
+                "auto_run": self.auto_run,
+                "archived": self.archived,
+                "archive": dict(self.archive_status),
             }
 
     def peer_info(self) -> dict:
@@ -430,28 +445,53 @@ class Room:
                     "submissions": len(self.uploads),
                     "results": results,
                 }
-        return {
-            "kind": self.kind,
-            "code": display_code(self.code),
-            "name": self.name,
-            "private": self.private,
-            "instructions": self.instructions,
-            "accepting": self.accepting and not self.ended,
-            "expires": self.expires,
-            "now": time.time(),
-            "limits": {"peer_bytes": self.limits.peer_bytes, "peer_files": self.limits.peer_files},
-            "extensions": sorted(set(EXT_MAP) | set(ARCHIVE_EXT)),
-        }
+        with self.lock:
+            return {
+                "kind": self.kind,
+                "code": display_code(self.code),
+                "name": self.name,
+                "private": self.private,
+                "instructions": self.instructions,
+                "accepting": self.accepting and not self.ended,
+                "expires": self.expires,
+                "now": time.time(),
+                "limits": {"peer_bytes": self.limits.peer_bytes, "peer_files": self.limits.peer_files},
+                "extensions": sorted(set(EXT_MAP) | set(ARCHIVE_EXT)),
+                "auto_run": self.auto_run,
+                "archived": self.archived,
+                "uploaders": sorted(
+                    ({"label": u.label, "updated": u.updated} for u in self.uploads.values()),
+                    key=lambda x: x["label"].lower(),
+                ),
+                "leaderboard": self.leaderboard(),
+            }
+
+    def leaderboard(self) -> dict:
+        """What every peer sees: the latest results by both algorithms."""
+        a = self.public_analysis()
+        out = {"status": a.get("status", "idle"), "pending": self.version != a.get("version")}
+        if a.get("status") == "done":
+            sm = a["summary"]
+            out.update(
+                finished=a.get("finished"),
+                moss=sm.get("moss", {}).get("pairs", []),
+                mosaic=[{k: p[k] for k in ("sa", "sb", "score")} for p in sm.get("top", [])],
+            )
+        return out
 
 
 class Hub:
     """All rooms on this server."""
 
     def __init__(self, limits: Limits, create_key: str | None = None,
-                 harness: "bpeval.Harness | None" = None) -> None:
+                 harness: "bpeval.Harness | None" = None, *,
+                 archive: "archive_mod.GitHubArchive | None" = None,
+                 auto_delay: float | None = None) -> None:
         self.limits = limits
         self.create_key = create_key or None
         self.harness = harness
+        self.archive = archive
+        self.auto_delay = auto_delay  # None: automatic checks are off
         self.rooms: dict[str, Room] = {}
         self.lock = threading.RLock()
         self.closed_rooms = 0
@@ -478,6 +518,9 @@ class Hub:
                 raise LimitError("this server has reached its room limit; try again later")
             hours = max(0.25, min(float(hours), self.limits.max_room_hours))
             room = Room(self._new_code(), name, private, hours * 3600, self.limits, kind)
+            if room.kind == "similarity":
+                room.auto_run = self.auto_delay is not None
+                room.archived = self.archive is not None
             self.rooms[room.code] = room
             return room
 
@@ -521,6 +564,35 @@ class Hub:
             rooms = list(self.rooms.values())
         return sum(r.total_bytes() for r in rooms)
 
+    def auto_due(self, now: float | None = None) -> list[Room]:
+        """Similarity rooms whose submissions changed and have been quiet for
+        auto_delay seconds, with no check running."""
+        if self.auto_delay is None:
+            return []
+        now = time.time() if now is None else now
+        with self.lock:
+            rooms = list(self.rooms.values())
+        due = []
+        for r in rooms:
+            with r.lock:
+                if (r.auto_run and not r.ended and len(r.uploads) >= 2
+                        and r.analysis.get("status") != "running"
+                        and r.analysis.get("version") != r.version
+                        and r.auto_tried != r.version
+                        and now - r.last_change >= self.auto_delay):
+                    due.append(r)
+        return due
+
+    def run_due(self, now: float | None = None) -> int:
+        n = 0
+        for r in self.auto_due(now):
+            with r.lock:
+                r.auto_tried = r.version
+                opts = dict(r.opts)
+            if start_analysis(r, opts, self) is None:
+                n += 1
+        return n
+
     def room_for_report_link(self, token: str) -> Room | None:
         with self.lock:
             rooms = list(self.rooms.values())
@@ -540,16 +612,7 @@ class Hub:
 # --- analysis ------------------------------------------------------------
 
 
-def top_pairs(pairs, n: int) -> list:
-    """The top n by mosaic score plus the top n by MOSS score, so either
-    ranking can be shown in full."""
-    by_mosaic = pairs[:n]
-    seen = {id(p) for p in by_mosaic}
-    extra = [p for p in sorted(pairs, key=lambda p: -p.moss)[:n] if id(p) not in seen]
-    return by_mosaic + extra
-
-
-def summarize(rep, elapsed: float) -> dict:
+def summarize(rep, mrep, elapsed: float) -> dict:
     top = [
         {
             "a": p.a.rel,
@@ -557,34 +620,37 @@ def summarize(rep, elapsed: float) -> dict:
             "sa": p.a.submission,
             "sb": p.b.submission,
             "score": round(p.score, 4),
-            "moss": round(p.moss, 4),
-            "moss_a": round(p.fp_a, 4),
-            "moss_b": round(p.fp_b, 4),
+            "overlap": round(p.fp, 4),
             "z": round(p.z, 2),
-            "fp": round(p.fp, 4),
             "ast": round(p.ast, 4),
             "rename": round(p.rename.score, 4),
             "reasons": p.reasons,
         }
-        for p in top_pairs(rep.pairs, 30)
+        for p in [p for p in rep.pairs if p.score >= rep.cfg.threshold][:30]
     ]
     return {
         "files": len(rep.docs),
         "submissions": len({d.submission for d in rep.docs}),
         "pairs_examined": rep.n_compared,
-        "above_threshold": len(rep.pairs),
+        "above_threshold": sum(1 for p in rep.pairs if p.score >= rep.cfg.threshold),
         "flagged": sum(1 for p in rep.pairs if p.score >= 0.5),
-        "flagged_moss": sum(1 for p in rep.pairs if p.moss >= 0.5),
         "median": round(rep.median, 4),
         "suppressed": rep.cohort.suppressed_fp + rep.cohort.suppressed_tree,
         "skipped": len(rep.skipped),
         "clusters": [{"members": c.members, "mean": round(c.mean_score, 4)} for c in rep.clusters],
         "top": top,
+        "moss": {
+            "submissions": len(mrep.programs),
+            "pairs_examined": mrep.n_compared,
+            "matched": len(mrep.pairs),
+            "flagged": sum(1 for p in mrep.pairs if p.score >= 0.5),
+            "pairs": [moss_mod.pair_summary(p) for p in mrep.shown],
+        },
         "elapsed": round(elapsed, 2),
     }
 
 
-def start_analysis(room: Room, opts: dict) -> str | None:
+def start_analysis(room: Room, opts: dict, hub: "Hub | None" = None) -> str | None:
     """Kick off a check in a worker thread. Returns an error message or None."""
     try:
         cfg = Config(
@@ -605,6 +671,7 @@ def start_analysis(room: Room, opts: dict) -> str | None:
         skeleton = list(room.skeleton.items())
         version = room.version
         private = room.private
+        room.opts = {"threshold": cfg.threshold, "lang": cfg.lang}
         room.analysis = {
             "status": "running",
             "phase": "starting",
@@ -622,12 +689,13 @@ def start_analysis(room: Room, opts: dict) -> str | None:
     def work() -> None:
         try:
             t0 = time.time()
+            mrep = moss_mod.run_sources(snapshot, moss_mod.MossConfig(lang=cfg.lang), skeleton, progress=progress)
             rep = run_sources(snapshot, cfg, skeleton, progress=progress)
-            if not rep.docs:
+            if not rep.docs and not mrep.programs:
                 raise ValueError("none of the uploaded files is source code mosaic can read")
-            html = report_mod.build_html(rep, title=room.name, redact=private).encode("utf-8")
-            js = report_mod.build_json(rep, redact=private).encode("utf-8")
-            summary = summarize(rep, time.time() - t0)
+            html = report_mod.build_html(rep, title=room.name, redact=private, moss_rep=mrep).encode("utf-8")
+            js = report_mod.build_json(rep, redact=private, moss_rep=mrep).encode("utf-8")
+            summary = summarize(rep, mrep, time.time() - t0)
             with room.lock:
                 if room.ended:
                     return
@@ -639,6 +707,8 @@ def start_analysis(room: Room, opts: dict) -> str | None:
                     "finished": time.time(),
                     "options": {"threshold": cfg.threshold, "lang": cfg.lang},
                 }
+            if hub is not None and hub.archive is not None and room.archived:
+                save_copy(hub.archive, room, html, js)
         except Exception as exc:  # surface every failure in the dashboard
             with room.lock:
                 room.analysis = {
@@ -651,6 +721,26 @@ def start_analysis(room: Room, opts: dict) -> str | None:
 
     threading.Thread(target=work, daemon=True, name=f"mosaic-check-{room.code}").start()
     return None
+
+
+def save_copy(archive, room: Room, html: bytes, js: bytes) -> None:
+    """Commit the latest report to the archive in the background,
+    replacing the room's previous copy."""
+    with room.lock:
+        room.archive_status = {"state": "saving", "since": time.time()}
+        folder, title = room.archive_dir, room.name
+
+    def work() -> None:
+        try:
+            sha = archive.save(folder, {"report.html": html, "results.json": js},
+                               f"Report for {title} ({display_code(room.code)})")
+            status = {"state": "saved", "at": time.time(), "commit": sha[:10], "url": archive.folder_url(folder)}
+        except Exception as exc:
+            status = {"state": "error", "at": time.time(), "error": str(exc)[:300]}
+        with room.lock:
+            room.archive_status = status
+
+    threading.Thread(target=work, daemon=True, name=f"mosaic-archive-{room.code}").start()
 
 
 # --- predictor rooms -----------------------------------------------------
@@ -1003,6 +1093,8 @@ class Handler(BaseHTTPRequestHandler):
                     "create_key_required": bool(self.hub.create_key),
                     "durations": [d for d in DURATIONS if d <= self.hub.limits.max_room_hours],
                     "local_only": self.server.local_only,
+                    "auto_run": self.hub.auto_delay is not None,
+                    "archive": self.hub.archive.describe() if self.hub.archive else None,
                     "predictor": {
                         "available": self.hub.predictor_problem() is None,
                         "problem": self.hub.predictor_problem(),
@@ -1103,7 +1195,7 @@ class Handler(BaseHTTPRequestHandler):
                 if room.kind == "predictor":
                     err = start_bp_eval(self.hub, room)
                     return self._error(409, err) if err else self._json({"started": True}, 202)
-                err = start_analysis(room, data)
+                err = start_analysis(room, data, self.hub)
                 return self._error(409, err) if err else self._json({"started": True}, 202)
             if action == "report-link":
                 if room.report_html is None:
@@ -1384,9 +1476,20 @@ def create_server(
     public_url: str | None = None,
     behind_proxy: bool = False,
     harness: "bpeval.Harness | None" = None,
+    archive: "archive_mod.GitHubArchive | None" = None,
+    auto_delay: float | None = None,
 ) -> RoomServer:
-    hub = Hub(limits or Limits(), create_key, harness)
+    hub = Hub(limits or Limits(), create_key, harness, archive=archive, auto_delay=auto_delay)
     return RoomServer((host, port), hub, public_url=public_url, behind_proxy=behind_proxy)
+
+
+def watch_auto(srv: RoomServer, interval: float = 2.0, log=print) -> None:
+    """Start checks in rooms whose submissions changed and then went quiet."""
+    while not srv.stopping.wait(interval):
+        try:
+            srv.hub.run_due()
+        except Exception as exc:  # keep watching
+            log(f"  automatic check failed to start: {exc}")
 
 
 def watch_expiry(srv: RoomServer, interval: float = 15.0, log=print) -> None:
@@ -1476,6 +1579,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--bp-run-seconds", type=int, default=_env_int("MOSAIC_BP_RUN_SECONDS", 600),
                    help="time limit for one submission on all traces")
     p.add_argument("--no-predictor-rooms", action="store_true", help="turn predictor rooms off")
+    p.add_argument("--auto-run-delay", type=float, default=float(_env_int("MOSAIC_AUTO_RUN_DELAY", 15)),
+                   help="seconds after the last change to a room's submissions before it is checked again")
+    p.add_argument("--no-auto-run", action="store_true", default=env.get("MOSAIC_AUTO_RUN") == "0",
+                   help="only check when the admin clicks Run check")
     p.add_argument("--open", action="store_true", help="open the create-room page in your browser")
     args = p.parse_args(argv)
 
@@ -1486,12 +1593,14 @@ def main(argv: list[str] | None = None) -> int:
         max_rooms=args.max_rooms,
         max_room_hours=args.max_room_hours,
     )
+    archive, archive_problem = archive_mod.from_env(env)
     harness = None
     if not args.no_predictor_rooms:
         harness = bpeval.Harness(args.bp_harness, args.bp_traces, run_seconds=args.bp_run_seconds)
     try:
         srv = create_server(args.host, args.port, limits=limits, create_key=args.create_key,
-                            public_url=args.public_url, behind_proxy=args.behind_proxy, harness=harness)
+                            public_url=args.public_url, behind_proxy=args.behind_proxy, harness=harness,
+                            archive=archive, auto_delay=None if args.no_auto_run else max(1.0, args.auto_run_delay))
     except OSError as exc:
         print(f"mosaic: cannot listen on {args.host}:{args.port}: {exc}")
         return 1
@@ -1523,6 +1632,14 @@ def main(argv: list[str] | None = None) -> int:
                   f"{'' if harness.network_isolated else ' (runs are not network-isolated on this host)'}.")
         print()
 
+    if srv.hub.auto_delay is not None:
+        threading.Thread(target=watch_auto, args=(srv,), daemon=True, name="mosaic-auto").start()
+        print(f"  Automatic checks are on: a room is checked {srv.hub.auto_delay:.0f}s after its submissions change.")
+    if archive is not None:
+        print(f"  Reports are saved permanently to {archive.describe()}.")
+    elif archive_problem:
+        print(f"  Reports are NOT saved permanently: {archive_problem}.")
+    print()
     threading.Thread(target=watch_expiry, args=(srv,), daemon=True).start()
     if args.keep_awake:
         if srv.public_url:

@@ -142,7 +142,7 @@ details>summary{cursor:pointer;color:var(--muted);font-size:.86rem}
     <div class="brand">mosaic</div>
     <div>
       <h1 style="font-size:1.8rem">Code similarity rooms</h1>
-      <p class="muted" style="margin:6px 0 0">Collect submissions in a room and check them for similarity. Nothing is stored: closing a room deletes every file.</p>
+      <p class="muted" style="margin:6px 0 0">Collect submissions in a room and check them with MOSS and mosaic. Uploaded files live only in memory: closing a room deletes them.</p>
     </div>
     <div class="hero">
       <form class="card stack" id="l-join" autocomplete="off">
@@ -194,7 +194,7 @@ details>summary{cursor:pointer;color:var(--muted);font-size:.86rem}
           <label><input type="radio" name="privacy" value="open">
             <b>Visible</b><span>You can read matching code side by side in the report, like MOSS.</span></label>
         </div>
-        <div class="notice info small" style="margin-top:8px">This choice is locked once the room is created. Peers see which mode the room uses before they upload.</div>
+        <div class="notice info small" style="margin-top:8px">This choice is locked once the room is created. Peers see which mode the room uses before they upload. Either way, everyone in the room sees who has uploaded and a live leaderboard of similarity scores (MOSS and mosaic) with names.<span id="c-archive-note"></span></div>
       </div>
       <label class="field" style="max-width:260px"><span>Room closes automatically after</span>
         <select id="c-hours"></select>
@@ -237,6 +237,19 @@ details>summary{cursor:pointer;color:var(--muted);font-size:.86rem}
     </div>
 
     <div id="p-closed" class="notice warn" hidden>The host isn't accepting submissions right now.</div>
+
+    <section id="p-board" class="card stack" hidden>
+      <div class="row"><h2 style="margin:0">Live leaderboard</h2><span class="spacer"></span>
+        <span class="seg" role="group" aria-label="Algorithm" id="p-algo"><button type="button" data-algo="moss">MOSS</button><button type="button" data-algo="mosaic">mosaic</button></span></div>
+      <div class="row small muted" id="p-board-status"></div>
+      <input type="text" id="p-board-q" placeholder="Search by name" aria-label="Search the leaderboard by name">
+      <div class="tablewrap" id="p-board-table"></div>
+    </section>
+
+    <section id="p-people" class="card stack" hidden>
+      <h2 style="margin:0">Submitted so far <span class="muted" id="p-people-count"></span></h2>
+      <div class="small" id="p-people-list"></div>
+    </section>
 
     <section id="p-results" class="card stack" hidden>
       <h2 style="margin:0">Class results</h2>
@@ -378,7 +391,7 @@ details>summary{cursor:pointer;color:var(--muted);font-size:.86rem}
       <section class="card stack" id="h-sim">
         <h2 style="margin:0">Similarity check</h2>
         <div class="row">
-          <label class="field" style="flex:1;min-width:180px"><span>Report pairs scoring at least <b id="h-thr-v">25%</b></span>
+          <label class="field" style="flex:1;min-width:180px"><span>mosaic: report pairs scoring at least <b id="h-thr-v">25%</b></span>
             <input type="range" id="h-thr" min="10" max="80" step="5" value="25" style="width:100%">
           </label>
           <label class="field" style="width:160px"><span>Language</span>
@@ -386,6 +399,8 @@ details>summary{cursor:pointer;color:var(--muted);font-size:.86rem}
           </label>
         </div>
         <div class="row"><button class="primary" id="h-run">Run check</button><span id="h-run-msg" class="small muted"></span></div>
+        <div id="h-auto" class="small muted" hidden></div>
+        <div id="h-archive" class="notice small info" hidden></div>
         <div id="h-progress" hidden><div class="bar"><i></i></div><div class="muted small" style="margin-top:4px" data-text></div></div>
         <div id="h-stale" class="notice warn" hidden>Submissions have changed since this check. Run it again to include them.</div>
         <div id="h-error" class="notice hot" hidden></div>
@@ -394,20 +409,17 @@ details>summary{cursor:pointer;color:var(--muted);font-size:.86rem}
     </div>
 
     <section class="card stack" id="h-results" hidden>
-      <div class="row"><h2 style="margin:0">Results</h2><span class="spacer"></span>
+      <div class="row"><h2 style="margin:0">Results</h2>
+        <span class="seg" role="group" aria-label="Algorithm" id="h-algo"><button type="button" data-algo="moss">MOSS</button><button type="button" data-algo="mosaic">mosaic</button></span>
+        <span class="spacer"></span>
         <a class="btn primary" id="h-open" target="_blank" rel="noopener noreferrer" href="#">Open full report</a>
         <button id="h-dl-html">Download report</button>
         <button id="h-dl-json">Download JSON</button>
       </div>
       <p class="muted small" style="margin:0" id="h-results-note"></p>
+      <div class="tiles" id="h-algo-tiles"></div>
       <div id="h-clusters"></div>
-      <div class="row small" id="h-rank" hidden><span class="muted">Rank by</span>
-        <span class="seg" role="group" aria-label="Rank pairs by">
-          <button type="button" data-rank="mosaic" aria-pressed="true">mosaic score</button>
-          <button type="button" data-rank="moss" aria-pressed="false">MOSS score</button>
-        </span>
-        <span class="muted">mosaic combines five signals. MOSS is token-fingerprint overlap alone, the number MOSS itself reports (each file's share in brackets).</span>
-      </div>
+      <input type="text" id="h-q" placeholder="Search by name" aria-label="Search results by name">
       <div class="tablewrap" id="h-pairs"></div>
     </section>
 
@@ -544,6 +556,35 @@ function jsonPost(url, body, headers){
   return fetch(url, {method: "POST", headers: {"X-Mosaic": "1", "Content-Type": "application/json", ...(headers || {})}, body: JSON.stringify(body || {})});
 }
 
+function boardHtml(lb, algo, q, mine){
+  q = (q || "").trim().toLowerCase();
+  const hit = (...names) => !q || names.some(n => String(n).toLowerCase().includes(q));
+  const me = n => mine && n === mine ? ' style="font-weight:700"' : "";
+  if (algo === "mosaic"){
+    const rows = (lb.mosaic || []).filter(p => hit(p.sa, p.sb));
+    if (!rows.length) return '<div class="empty">' + (q ? "No pairs match your search." : "No pairs above the mosaic threshold.") + '</div>';
+    return `<table><thead><tr><th class="num">#</th><th>Submission</th><th>Submission</th><th class="num">mosaic score</th></tr></thead><tbody>${
+      rows.map((p, i) => `<tr><td class="num muted">${i + 1}</td><td class="name"${me(p.sa)}>${esc(p.sa)}</td><td class="name"${me(p.sb)}>${esc(p.sb)}</td>
+        <td class="num score ${sevOf(p.score)}">${pct(p.score)}<span class="meter"><i style="width:${pct(p.score)}"></i></span></td></tr>`).join("")}</tbody></table>`;
+  }
+  const rows = (lb.moss || []).filter(p => hit(p.a, p.b));
+  if (!rows.length) return '<div class="empty">' + (q ? "No pairs match your search." : "No matching passages between any two submissions.") + '</div>';
+  return `<table><thead><tr><th class="num">#</th><th>File 1</th><th>File 2</th><th class="num">Lines matched</th></tr></thead><tbody>${
+    rows.map((p, i) => `<tr><td class="num muted">${i + 1}</td>
+      <td class="name"${me(p.a)}>${esc(p.a)}/ <span class="score ${sevOf(p.pct_a)}">(${pct(p.pct_a)})</span></td>
+      <td class="name"${me(p.b)}>${esc(p.b)}/ <span class="score ${sevOf(p.pct_b)}">(${pct(p.pct_b)})</span></td>
+      <td class="num">${p.lines}</td></tr>`).join("")}</tbody></table>`;
+}
+const sevOf = v => v >= .6 ? "s-hot" : v >= .4 ? "s-warn" : "s-low";
+function algoSeg(box, get, set){
+  box.querySelectorAll("[data-algo]").forEach(b => b.onclick = () => { set(b.dataset.algo); paintSeg(box, get()); });
+  paintSeg(box, get());
+}
+function paintSeg(box, v){ box.querySelectorAll("[data-algo]").forEach(b => b.setAttribute("aria-pressed", b.dataset.algo === v)); }
+let ALGO = "moss";
+try { ALGO = localStorage.getItem("mosaic-view") === "mosaic" ? "mosaic" : "moss"; } catch {}
+const setAlgo = v => { ALGO = v; try { localStorage.setItem("mosaic-view", v); } catch {} };
+
 const fmtMpki = v => v == null ? "–" : Number(v).toFixed(3);
 function bpTiles(sm){
   const t = [[sm.evaluated, "evaluated"]];
@@ -604,6 +645,7 @@ async function createView(){
   sel.value = cfg.durations.includes(4) ? "4" : String(cfg.durations[cfg.durations.length - 1]);
   $("#c-key-wrap").hidden = !cfg.create_key_required;
   $("#c-key").required = !!cfg.create_key_required;
+  if (cfg.archive) $("#c-archive-note").textContent = ` Each report is saved permanently to ${cfg.archive}, replacing the previous copy.`;
   const bp = cfg.predictor || {available: false, problem: "not supported by this server"};
   const bpRadio = document.querySelector('input[name="kind"][value="predictor"]');
   if (!bp.available){
@@ -667,9 +709,12 @@ function peerView(code){
     pv.className = "notice small " + (info.private ? "priv" : "info");
     pv.innerHTML = isBp
       ? `<b>Private evaluation.</b> Upload your <span class="mono">mine.cpp</span>. The server compiles it, deletes the source, and runs it on the course traces. Nobody sees your code or your MPKI: not the host, not other peers, not you. Only the class average and median are published.`
-      : info.private
+      : (info.private
       ? "<b>Code hidden.</b> Nobody, including the host, can read your code. The report shows only how similar submissions are."
-      : "<b>Code visible.</b> The host can read submitted code in the similarity report.";
+      : "<b>Code visible.</b> The host can read submitted code in the similarity report.")
+      + " <b>Everyone in this room sees who has uploaded and a live leaderboard of similarity scores between submissions, with names.</b>"
+      + (info.archived ? " A copy of each report is saved permanently by the host." : "");
+    if (!isBp) renderBoard();
     if (isBp){
       $("#p-drop-title").innerHTML = 'Drop your <span class="mono">mine.cpp</span> here';
       $("#p-drop-sub").textContent = "Only this one file is used. Run tools/check_rules.py on it first.";
@@ -722,6 +767,25 @@ function peerView(code){
       if (res.ok) build = await res.json();
     } catch {}
     if (!replacing) renderBuild(r);
+  }
+  let boardQ = "";
+  $("#p-board-q").addEventListener("input", e => { boardQ = e.target.value; renderBoard(); });
+  algoSeg($("#p-algo"), () => ALGO, v => { setAlgo(v); renderBoard(); });
+  function renderBoard(){
+    const ups = info.uploaders || [], lb = info.leaderboard || {};
+    $("#p-people").hidden = !ups.length;
+    $("#p-people-count").textContent = `(${ups.length})`;
+    $("#p-people-list").innerHTML = ups.map(u => `<span class="pill" style="margin:0 6px 6px 0" title="uploaded ${esc(fmtTime(u.updated))}">${esc(u.label)}</span>`).join("");
+    const done = lb.status === "done";
+    $("#p-board").hidden = ups.length < 2 && !done;
+    paintSeg($("#p-algo"), ALGO);
+    const mine = (store.get(KEY) || {}).label;
+    let st = "";
+    if (lb.status === "running") st = "Checking the latest submissions&hellip;";
+    else if (done) st = `Updated at ${fmtTime(lb.finished)}.` + (lb.pending ? " New submissions will be included shortly." : "");
+    else st = info.auto_run ? "The first check runs shortly after two people have uploaded." : "Waiting for the host to run the check.";
+    $("#p-board-status").innerHTML = st;
+    $("#p-board-table").innerHTML = done ? boardHtml(lb, ALGO, boardQ, mine) : "";
   }
   function renderResults(){
     const box = $("#p-results"), res = info.results;
@@ -776,7 +840,7 @@ function peerView(code){
   };
   load().then(ok => {
     if (!ok) return;
-    setInterval(load, 20000);
+    setInterval(load, info.kind === "predictor" ? 20000 : 5000);
     const r = store.get(KEY);
     if (r && info.kind === "predictor") pollBuild(r);
   });
@@ -889,14 +953,28 @@ function hostView(code){
     } else prog.hidden = true;
     $("#h-error").hidden = a.status !== "error";
     if (a.status === "error") $("#h-error").textContent = "The check failed: " + a.error;
-    $("#h-stale").hidden = !(a.status === "done" && a.stale);
+    $("#h-stale").hidden = !(a.status === "done" && a.stale) || s.auto_run;
+    $("#h-auto").hidden = !s.auto_run;
+    $("#h-auto").textContent = a.status === "done" && a.stale && s.uploads.length >= 2
+      ? "Submissions changed; the check reruns automatically a few seconds after the last upload."
+      : "Checks run automatically whenever submissions change.";
+    const ar = s.archive || {}, abox = $("#h-archive");
+    abox.hidden = !s.archived;
+    if (s.archived){
+      abox.className = "notice small " + (ar.state === "error" ? "hot" : ar.state === "saved" ? "ok" : "info");
+      abox.innerHTML = ar.state === "saved" ? `Latest report saved permanently at ${fmtTime(ar.at)} &middot; <a href="${esc(ar.url)}" target="_blank" rel="noopener noreferrer">open on GitHub</a>`
+        : ar.state === "saving" ? "Saving the report to GitHub&hellip;"
+        : ar.state === "error" ? "Could not save the report to GitHub: " + esc(ar.error)
+        : "Each report is saved permanently to GitHub after every check, replacing the previous copy.";
+    }
     $("#h-results").hidden = a.status !== "done";
-    $("#h-tiles-wrap").hidden = a.status !== "done";
-    $("#h-results-note").textContent = s.private
+    $("#h-tiles-wrap").hidden = true;
+    $("#h-results-note").textContent = (s.private
       ? "This room hides code: the report shows each file as blurred line shapes with the matching passages highlighted. No code text is sent to your browser."
-      : "The full report shows matching code side by side. Downloading saves a copy on this computer, which you'll need to delete yourself.";
-    $("#h-footnote").textContent = "Everything in this room (uploads, skeleton and reports) is held in the server's memory only. Closing the room, reaching its time limit, or stopping the server deletes all of it."
-      + (s.private ? "" : " Nothing is written to disk unless you download a report.");
+      : "The full report shows matching code side by side. Downloading saves a copy on this computer, which you'll need to delete yourself.")
+      + " MOSS and mosaic are independent algorithms; peers see the same leaderboard.";
+    $("#h-footnote").textContent = "Uploads and the skeleton are held in the server's memory only; closing the room, reaching its time limit, or stopping the server deletes them."
+      + (s.archived ? " The latest report is also saved permanently to GitHub and stays there after the room closes." : " Nothing is written to disk unless you download a report.");
     if (a.status === "done") renderResults(a.summary);
   }
 
@@ -961,41 +1039,27 @@ function hostView(code){
     if ($("#h-open").getAttribute("href") === "#"){ e.preventDefault(); refreshReportLink(true); }
     else if (Date.now() >= linkExpires) setTimeout(() => refreshReportLink(true), 0);
   });
-  let rankBy = "mosaic";
-  try { rankBy = localStorage.getItem("mosaic-rank") === "moss" ? "moss" : "mosaic"; } catch (e) {}
-  document.querySelectorAll("#h-rank [data-rank]").forEach(b => b.addEventListener("click", () => {
-    rankBy = b.dataset.rank;
-    try { localStorage.setItem("mosaic-rank", rankBy); } catch (e) {}
-    if (lastSummary) renderPairs(lastSummary);
-  }));
-  const sev = v => v >= .6 ? "s-hot" : v >= .4 ? "s-warn" : "s-low";
-  function renderPairs(sm){
-    document.querySelectorAll("#h-rank [data-rank]").forEach(b => b.setAttribute("aria-pressed", b.dataset.rank === rankBy));
-    $("#h-rank").hidden = !sm.top.length;
-    const other = rankBy === "moss" ? "score" : "moss", key = rankBy === "moss" ? "moss" : "score";
-    const rows = sm.top.slice().sort((x, y) => (y[key] - x[key]) || (y[other] - x[other])).slice(0, 30);
-    const th = (col, label) => `<th class="num${rankBy === col ? " sorted" : ""}">${label}</th>`;
-    $("#h-pairs").innerHTML = !rows.length ? '<div class="empty">No pairs above the threshold.</div>'
-      : `<table><thead><tr><th class="num">#</th>${th("mosaic", "mosaic score")}${th("moss", "MOSS score")}<th>Pair</th><th class="num">Structure</th><th class="num">z</th></tr></thead><tbody>${
-        rows.map((p, i) => {
-          const moss = p.moss ?? p.fp;
-          return `<tr><td class="num muted">${i + 1}</td>
-            <td class="score ${sev(p.score)}" style="white-space:nowrap">${pct(p.score)}<span class="meter"><i style="width:${pct(p.score)}"></i></span></td>
-            <td class="score ${sev(moss)}" style="white-space:nowrap">${pct(moss)}<span class="meter"><i style="width:${pct(moss)}"></i></span>${p.moss_a != null ? `<div class="muted small" style="font-weight:400">${pct(p.moss_a)} / ${pct(p.moss_b)}</div>` : ""}</td>
-            <td><b>${esc(p.sa)}</b> &harr; <b>${esc(p.sb)}</b><div class="reasons">${esc((p.reasons || []).slice(0, 2).join(" · "))}</div></td>
-            <td class="num">${pct(p.ast)}</td><td class="num">${p.z ? p.z.toFixed(1) : "–"}</td></tr>`;
-        }).join("")}</tbody></table>`;
+  let hq = "";
+  $("#h-q").addEventListener("input", e => { hq = e.target.value; if (lastSummary) renderBoardAdmin(lastSummary); });
+  algoSeg($("#h-algo"), () => ALGO, v => { setAlgo(v); if (lastSummary) renderBoardAdmin(lastSummary); });
+  function renderBoardAdmin(sm){
+    paintSeg($("#h-algo"), ALGO);
+    const m = sm.moss || {pairs: []};
+    const tiles = ALGO === "moss"
+      ? [[m.submissions ?? sm.submissions, "submissions"], [(m.pairs_examined ?? 0).toLocaleString(), "pairs examined"], [m.matched ?? m.pairs.length, "pairs with matches"], [m.flagged ?? 0, "MOSS ≥ 50%"]]
+      : [[sm.submissions, "submissions"], [sm.files, "files"], [sm.pairs_examined.toLocaleString(), "pairs examined"], [sm.above_threshold, "above threshold"], [sm.flagged, "mosaic ≥ 50%"], [sm.clusters.length, "clusters"]];
+    $("#h-algo-tiles").innerHTML = tiles.map(([n, l]) => `<div class="tile"><b>${n}</b><span>${l}</span></div>`).join("");
+    $("#h-clusters").hidden = ALGO !== "mosaic";
+    $("#h-pairs").innerHTML = boardHtml({moss: m.pairs, mosaic: sm.top}, ALGO, hq);
   }
   function renderResults(sm){
     refreshReportLink(false);
     if (JSON.stringify(sm) === JSON.stringify(lastSummary)) return;
     lastSummary = sm;
     refreshReportLink(true);
-    $("#h-tiles").innerHTML = [
-      [sm.submissions, "submissions"], [sm.files, "files"], [sm.pairs_examined.toLocaleString(), "pairs examined"],
-      [sm.above_threshold, "above threshold"], [sm.flagged, "mosaic ≥ 50%"], [sm.flagged_moss ?? 0, "MOSS ≥ 50%"], [sm.clusters.length, "clusters"],
-    ].map(([n, l]) => `<div class="tile"><b>${n}</b><span>${l}</span></div>`).join("");
-    renderPairs(sm);
+    $("#h-tiles").innerHTML = "";
+    $("#h-tiles-wrap").hidden = true;
+    renderBoardAdmin(sm);
     $("#h-clusters").innerHTML = sm.clusters.length
       ? sm.clusters.map(c => `<div class="notice warn" style="margin-bottom:6px"><b>${c.members.length} submissions</b> (mean ${pct(c.mean)}): ${c.members.map(esc).join(", ")}</div>`).join("") : "";
   }

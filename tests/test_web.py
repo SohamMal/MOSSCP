@@ -305,7 +305,10 @@ class TestAnalysis(ServerCase):
         self.assertIn(b"read_numbers", html)
         _, js, _ = self.admin(code, tok, "GET", "report.json")
         self.assertFalse(js["redacted"])
-        self.assertTrue(any(p["rename_map"] for p in js["pairs"]))
+        self.assertTrue(any(p["rename_map"] for p in js["mosaic"]["pairs"]))
+        moss_top = st["analysis"]["summary"]["moss"]["pairs"][0]
+        self.assertEqual({moss_top["a"], moss_top["b"]}, {"s01_original", "s02_renamed"})
+        self.assertIn(b'data-view="moss"', html)
 
     def test_private_room_never_reveals_code(self):
         subs = ["s01_original", "s02_renamed", "s03_refactored", "c01_original", "c02_disguised"]
@@ -332,7 +335,8 @@ class TestAnalysis(ServerCase):
             self.assertEqual(leaked, [], f"code leaked into {where}: {leaked[:10]}")
         self.assertIn('class="sil"', surfaces["report.html"])
         self.assertTrue(js["redacted"])
-        self.assertTrue(all(p["rename_map"] == [] for p in js["pairs"]))
+        self.assertTrue(all(p["rename_map"] == [] for p in js["mosaic"]["pairs"]))
+        self.assertTrue(js["moss"]["pairs"])  # MOSS results, still without code
         # whole source lines must not appear either
         self.assertNotIn("values.append(float(part))", surfaces["report.html"])
 
